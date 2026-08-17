@@ -258,6 +258,28 @@ correctly. Partition keying by sessionId makes out-of-order delivery rare in pra
 
 ---
 
+## Edge Case Behavior
+
+Explicit, tested decisions for scenarios beyond the happy path. Each row is covered by a test
+(unit or integration) and, where runnable end-to-end, by `scripts/simulate_edge_cases.sh`.
+
+| Scenario | Behavior | Rationale |
+| -------- | -------- | --------- |
+| **Duplicate transcript chunk** (same `transcriptId`) | Stored once; second delivery is a no-op | `existsByTranscriptId` dedup + `UNIQUE(transcript_id)` backstop. At-least-once delivery must be safe. |
+| **Out-of-order transcript delivery** | All stored; read/reconstruction order by `sequenceNumber` | Ordering is a read-time concern; arrival order is irrelevant. |
+| **Duplicate `meeting.started`** | Meeting metadata refreshed; session created only once | Idempotent upsert; `existsById(sessionId)` guards session creation. |
+| **Duplicate/replayed `meeting.ended`** | No-op if session already ENDED | Terminal state; avoids re-triggering reconstruction. |
+| **Transcript after `meeting.ended`** | Still persisted; session stays ENDED; visible via GET; **not** auto-re-assembled into the stored file | No data loss. The DB is the source of truth for the read API; re-assembling the file on every late segment would be wasteful. A re-reconstruction trigger could be added if needed. |
+| **`meeting.ended` without `meeting.started`** | `UnknownSessionException` → retried with backoff → DLQ | The started event may be briefly in flight (retry covers it); a truly orphaned end is dead-lettered rather than silently dropped. |
+| **Transcript before its `meeting.started`** | Same as above — retried, then DLQ if the session never appears | Keyed-by-session ordering makes this rare; retry covers transient lag. |
+| **Concurrent sessions, same meeting** | Tracked independently — separate segments and lifecycle under one Meeting | Matches the domain model (Meeting 1→* Session); sessionId is the unit of isolation. |
+| **Malformed payload (null `data`/fields)** | 202 at the edge; consumer fails fast with non-retryable `IllegalArgumentException` → immediate DLQ | Webhook accepts quickly (async contract); structural errors never succeed on retry, so they skip the retry budget. |
+| **Malformed JSON at the webhook** | 400 with a meaningful message | Caught synchronously before publishing; nothing enters the pipeline. |
+| **Missing/invalid HMAC signature** (when enabled) | 401, fail-closed | Security boundary is at ingestion. |
+| **Consumer failure (transient)** | Retried with exponential backoff, then DLQ | Bounded retries prevent poison-pill loops. |
+
+---
+
 ## Key Assumptions
 
 1. `sessionId` is globally unique and is the correct partition/idempotency key.

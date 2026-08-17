@@ -140,6 +140,32 @@
       <pre id="simTranscript">No transcript fetched yet.</pre>
     </div>
 
+    <!-- ─── Edge case scenarios ─────────────────────────────────────────────── -->
+    <div class="panel">
+      <label style="margin-bottom:10px; color: var(--text); font-weight:600;">Edge case scenarios</label>
+      <p class="hint" style="margin-top:0;">
+        Mirrors <code>scripts/simulate_edge_cases.sh</code>. Each button runs one scenario with fresh
+        UUIDs, then (where observable) polls the GET endpoint. Async outcomes like DLQ routing are
+        called out in the log — check Kafka UI (<code>meeting.events.DLT</code>) or app logs to confirm.
+      </p>
+
+      <div class="btn-row">
+        <button class="btn secondary edge-btn" data-scenario="duplicate" type="button">1 · Duplicate chunk</button>
+        <button class="btn secondary edge-btn" data-scenario="ooo" type="button">2 · Out-of-order</button>
+        <button class="btn secondary edge-btn" data-scenario="late" type="button">3 · Transcript after ended</button>
+        <button class="btn secondary edge-btn" data-scenario="orphanEnd" type="button">4 · Ended w/o started</button>
+        <button class="btn secondary edge-btn" data-scenario="concurrent" type="button">5 · Concurrent sessions</button>
+        <button class="btn secondary edge-btn" data-scenario="malformed" type="button">6 · Malformed payload</button>
+      </div>
+
+      <label style="margin:16px 0 6px;">Scenario log</label>
+      <pre id="edgeLog">Idle. Pick a scenario above.</pre>
+
+      <label style="margin:16px 0 6px;">GET result (where applicable)</label>
+      <div id="edgeGetStatus"><span class="status" id="edgeGetBadge">idle</span></div>
+      <pre id="edgeResult">Nothing fetched yet.</pre>
+    </div>
+
     <div class="panel">
       <div class="row">
         <div class="field">
@@ -497,6 +523,207 @@
 
     $("runSim").addEventListener("click", runSimulation);
     $("simRegen").addEventListener("click", simRegen);
+
+    // ─── Edge case scenarios ─────────────────────────────────────────────────
+    function edgeLog(line) {
+      const el = $("edgeLog");
+      const ts = new Date().toLocaleTimeString();
+      if (el.textContent.startsWith("Idle")) el.textContent = "";
+      el.textContent += `[${ts}] ${line}\n`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function setEdgeGetStatus(kind, text) {
+      const badge = $("edgeGetBadge");
+      badge.textContent = text;
+      badge.className = "status" + (kind ? " " + kind : "");
+    }
+
+    // Event builders scoped to explicit ids (edge scenarios use several sessions).
+    function edgeStarted(meetingId, sessionId) {
+      return {
+        event: "meeting.started",
+        meeting: {
+          id: meetingId, sessionId, title: "Edge Case", roomName: "room-42", status: "LIVE",
+          createdAt: new Date().toISOString(), startedAt: new Date().toISOString(),
+          organizedBy: { id: uuid(), name: "Alice" },
+        },
+      };
+    }
+    function edgeEnded(meetingId, sessionId) {
+      return {
+        event: "meeting.ended",
+        meeting: { id: meetingId, sessionId, endedAt: new Date().toISOString() },
+        reason: "HOST_ENDED_MEETING",
+      };
+    }
+    function edgeTranscript(meetingId, sessionId, transcriptId, seq, content) {
+      return {
+        event: "meeting.transcript",
+        meeting: { id: meetingId, sessionId },
+        data: {
+          transcriptId, sequenceNumber: seq,
+          speaker: { id: "70c5d391-5bca-4cf3-9907-bec205798adb", name: "Alice" },
+          content, startOffset: String(seq), endOffset: String(seq + 1), language: "en",
+        },
+      };
+    }
+
+    async function edgePost(label, payload) {
+      const r = await postEvent(payload);
+      edgeLog(`${label} → HTTP ${r.status}${r.ok ? "" : " " + r.text}`);
+      return r;
+    }
+
+    async function fetchTranscript(meetingId, sessionId, attempts, predicate) {
+      const url = `/api/v1/meetings/${meetingId}/sessions/${sessionId}/transcript`;
+      for (let i = 1; i <= attempts; i++) {
+        try {
+          const res = await fetch(url);
+          const text = await res.text();
+          if (res.ok) {
+            const body = JSON.parse(text);
+            if (!predicate || predicate(body)) {
+              setEdgeGetStatus("ok", `HTTP ${res.status} · ${body.segmentCount} segments · ${body.status}`);
+              $("edgeResult").textContent = JSON.stringify(body, null, 2);
+              return body;
+            }
+          }
+        } catch (e) { /* keep polling */ }
+        await sleep(500);
+      }
+      // Best-effort final fetch.
+      try {
+        const res = await fetch(url);
+        const text = await res.text();
+        setEdgeGetStatus(res.ok ? "ok" : "err", `HTTP ${res.status}`);
+        $("edgeResult").textContent = res.ok ? JSON.stringify(JSON.parse(text), null, 2) : text;
+      } catch (e) {
+        setEdgeGetStatus("err", "fetch failed");
+        $("edgeResult").textContent = "Failed to fetch: " + e.message;
+      }
+      return null;
+    }
+
+    const edgeScenarios = {
+      // 1. Duplicate transcript chunk (same transcriptId) → stored once.
+      async duplicate() {
+        const m = uuid(), s = uuid(), dup = uuid();
+        await edgePost("meeting.started", edgeStarted(m, s));
+        await sleep(400);
+        await edgePost("transcript #1 (transcriptId X)", edgeTranscript(m, s, dup, 1, "duplicate me"));
+        await edgePost("transcript #1 (transcriptId X again)", edgeTranscript(m, s, dup, 1, "duplicate me"));
+        edgeLog("Expect exactly ONE segment despite two identical deliveries.");
+        await fetchTranscript(m, s, 12, (b) => b.segmentCount >= 1);
+        edgeLog("→ segmentCount should be 1 (dedup on transcriptId).");
+      },
+
+      // 2. Out-of-order delivery (3,1,2) → read back 1,2,3.
+      async ooo() {
+        const m = uuid(), s = uuid();
+        await edgePost("meeting.started", edgeStarted(m, s));
+        await sleep(400);
+        await edgePost("transcript seq=3", edgeTranscript(m, s, uuid(), 3, "third"));
+        await edgePost("transcript seq=1", edgeTranscript(m, s, uuid(), 1, "first"));
+        await edgePost("transcript seq=2", edgeTranscript(m, s, uuid(), 2, "second"));
+        edgeLog("Published 3,1,2 — GET should return ordered 1,2,3.");
+        const body = await fetchTranscript(m, s, 15, (b) => b.segmentCount >= 3);
+        if (body) {
+          const order = body.entries.map((e) => e.sequenceNumber).join(",");
+          edgeLog(`→ entry order: ${order} (expected 1,2,3).`);
+        }
+      },
+
+      // 3. Transcript arriving after meeting.ended → still stored, session stays ENDED.
+      async late() {
+        const m = uuid(), s = uuid();
+        await edgePost("meeting.started", edgeStarted(m, s));
+        await sleep(400);
+        await edgePost("transcript seq=1 (during)", edgeTranscript(m, s, uuid(), 1, "during"));
+        await edgePost("meeting.ended", edgeEnded(m, s));
+        await sleep(600);
+        await edgePost("transcript seq=2 (LATE, after ended)", edgeTranscript(m, s, uuid(), 2, "late arrival"));
+        edgeLog("Late transcript is still stored (no data loss); session remains ENDED.");
+        const body = await fetchTranscript(m, s, 15, (b) => b.segmentCount >= 2 && b.status === "ENDED");
+        if (body) edgeLog(`→ segmentCount=${body.segmentCount}, status=${body.status}.`);
+      },
+
+      // 4. meeting.ended without meeting.started → retried then DLQ.
+      async orphanEnd() {
+        const m = uuid(), s = uuid();
+        await edgePost("meeting.ended (no prior started)", edgeEnded(m, s));
+        edgeLog("Expect retries then a record on meeting.events.DLT.");
+        edgeLog("The GET below should 404 (session never created).");
+        const url = `/api/v1/meetings/${m}/sessions/${s}/transcript`;
+        try {
+          const res = await fetch(url);
+          setEdgeGetStatus(res.status === 404 ? "ok" : "err", `HTTP ${res.status} (expected 404)`);
+          $("edgeResult").textContent = await res.text();
+        } catch (e) {
+          setEdgeGetStatus("err", "fetch failed");
+          $("edgeResult").textContent = e.message;
+        }
+      },
+
+      // 5. Concurrent sessions for the same meeting → tracked independently.
+      async concurrent() {
+        const m = uuid(), sa = uuid(), sb = uuid();
+        edgeLog(`meeting=${m}`);
+        edgeLog(`session A=${sa}  session B=${sb}`);
+        await edgePost("A: meeting.started", edgeStarted(m, sa));
+        await edgePost("B: meeting.started", edgeStarted(m, sb));
+        await edgePost("A: transcript", edgeTranscript(m, sa, uuid(), 1, "session A line"));
+        await edgePost("B: transcript", edgeTranscript(m, sb, uuid(), 1, "session B line"));
+        await edgePost("A: meeting.ended", edgeEnded(m, sa));
+        edgeLog("A should be ENDED, B should stay LIVE, segments attributed independently.");
+        const a = await fetchTranscript(m, sa, 15, (b) => b.segmentCount >= 1 && b.status === "ENDED");
+        if (a) edgeLog(`→ A: status=${a.status}, content=${a.entries.map((e) => e.content).join(" | ")}`);
+        // Show B separately in the log via a direct fetch.
+        try {
+          const res = await fetch(`/api/v1/meetings/${m}/sessions/${sb}/transcript`);
+          if (res.ok) {
+            const b = JSON.parse(await res.text());
+            edgeLog(`→ B: status=${b.status}, content=${b.entries.map((e) => e.content).join(" | ")}`);
+          }
+        } catch (e) { /* ignore */ }
+      },
+
+      // 6. Malformed payload (missing data) → 202 at edge, later DLQ.
+      async malformed() {
+        const m = uuid(), s = uuid();
+        await edgePost("meeting.started", edgeStarted(m, s));
+        await sleep(400);
+        // Missing "data" block — accepted at edge, fails fast in consumer.
+        await edgePost("meeting.transcript (missing data)", {
+          event: "meeting.transcript",
+          meeting: { id: m, sessionId: s },
+        });
+        edgeLog("Accepted at edge (202); consumer fails fast → meeting.events.DLT.");
+        edgeLog("GET below shows the session with 0 segments (malformed chunk never persisted).");
+        await fetchTranscript(m, s, 8, null);
+      },
+    };
+
+    async function runEdgeScenario(name, btn) {
+      $("edgeLog").textContent = "";
+      $("edgeResult").textContent = "Running…";
+      setEdgeGetStatus("", "running…");
+      document.querySelectorAll(".edge-btn").forEach((b) => (b.disabled = true));
+      try {
+        edgeLog(`Scenario: ${btn.textContent.trim()}`);
+        await edgeScenarios[name]();
+        edgeLog("Scenario complete.");
+      } catch (e) {
+        edgeLog("Scenario aborted: " + e.message);
+        setEdgeGetStatus("err", "aborted");
+      } finally {
+        document.querySelectorAll(".edge-btn").forEach((b) => (b.disabled = false));
+      }
+    }
+
+    document.querySelectorAll(".edge-btn").forEach((btn) => {
+      btn.addEventListener("click", () => runEdgeScenario(btn.dataset.scenario, btn));
+    });
 
     // Wire up events.
     $("event").addEventListener("change", loadPresetIntoTextarea);

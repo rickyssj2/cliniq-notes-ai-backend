@@ -191,24 +191,25 @@
 **Objective:** Harden behavior and cover scenarios beyond the happy path.
 
 ### Implementation
-- [ ] Duplicate transcript chunks
-- [ ] Out-of-order delivery
-- [ ] Transcript arriving after `meeting.ended`
-- [ ] `meeting.ended` without `meeting.started`
-- [ ] Concurrent sessions for the same meeting
-- [ ] Malformed payloads
-- [ ] Invalid HMAC signature
-- [ ] Consumer failure → retries → DLQ
-- [ ] Document each decision in README
+- [x] Duplicate transcript chunks (Phase 5 tests)
+- [x] Out-of-order delivery (Phase 5 tests)
+- [x] Transcript arriving after `meeting.ended` (EdgeCaseIntegrationTest)
+- [x] `meeting.ended` without `meeting.started` (DeadLetterIntegrationTest)
+- [x] Concurrent sessions for the same meeting (EdgeCaseIntegrationTest)
+- [x] Malformed payloads (MalformedTranscriptDlqIntegrationTest + webhook 400 tests)
+- [x] Invalid HMAC signature (WebhookSignatureIntegrationTest)
+- [x] Consumer failure → retries → DLQ (DeadLetterIntegrationTest)
+- [x] Documented each decision in DESIGN.md "Edge Case Behavior" (folded into README in Phase 10)
 
 ### Validation
-- [ ] Duplicate script → one segment
-- [ ] Out-of-order script → GET returns correct order
-- [ ] Late transcript → stored, behavior documented
-- [ ] Ended-without-started → documented outcome (DLQ or ENDED session)
-- [ ] Concurrent sessions tracked independently
-- [ ] DLQ populated after simulated failure
-- [ ] `./mvnw test` green
+- [x] Duplicate → one segment
+- [x] Out-of-order → GET returns correct order
+- [x] Late transcript → stored, behavior documented
+- [x] Ended-without-started → DLQ after retries (documented)
+- [x] Concurrent sessions tracked independently
+- [x] DLQ populated after simulated failure
+- [x] `./mvnw test` green (61 tests)
+- [x] Simulation scripts: `scripts/simulate_meeting.sh` (happy path) + `scripts/simulate_edge_cases.sh`
 
 ---
 
