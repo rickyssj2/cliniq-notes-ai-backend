@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: meeting-webhook-service
+
+  # JPA defaults
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+
+  # Flyway
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  # Kafka defaults
+  kafka:
+    consumer:
+      group-id: meeting-webhook-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+# Logging
+logging:
+  level:
+    ai.soulside: DEBUG
+    org.apache.kafka: WARN
+  pattern:
+    console: "%d{ISO8601} [%thread] [%X{correlationId:-}] %-5level %logger{36} - %msg%n"
+
+# App-specific config
+app:
+  webhook:
+    hmac-secret: ${WEBHOOK_HMAC_SECRET:change-me-in-production}
+  storage:
+    base-path: ./data/transcripts

@@ -1,0 +1,20 @@
+# Profile: local — used when running with Docker Compose infrastructure
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/meeting_webhook
+    username: app
+    password: app_secret
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+
+  kafka:
+    bootstrap-servers: localhost:29092
+
+  jpa:
+    show-sql: true
+
+logging:
+  level:
+    ai.soulside: DEBUG
+    org.springframework.kafka: INFO

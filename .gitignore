@@ -1,0 +1,25 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.kiro/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime
+*.log
+data/
+
+# Env
+.env
+
+# Docs
+*.pdf
+Backend Engineering Java Spring Boot Assignment.md
+PLAN.md
