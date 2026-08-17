@@ -91,6 +91,55 @@
       <code>local</code> profile, so no signature header is needed.
     </p>
 
+    <!-- ─── Full session simulation ─────────────────────────────────────────── -->
+    <div class="panel">
+      <label style="margin-bottom:10px; color: var(--text); font-weight:600;">Full session simulation</label>
+      <p class="hint" style="margin-top:0;">
+        Runs the whole lifecycle end to end: <code>meeting.started</code> →
+        N × <code>meeting.transcript</code> → <code>meeting.ended</code>, then polls
+        <code>GET /api/v1/meetings/{id}/sessions/{sessionId}/transcript</code> and shows the
+        reconstructed result (including the stored <code>transcriptUri</code>).
+      </p>
+
+      <div class="row">
+        <div class="field">
+          <label for="simMeetingId">meeting.id (UUID)</label>
+          <input id="simMeetingId" />
+        </div>
+        <div class="field">
+          <label for="simSessionId">meeting.sessionId (UUID)</label>
+          <input id="simSessionId" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="simChunks">Transcript chunks</label>
+          <input id="simChunks" type="number" min="1" max="20" value="3" />
+        </div>
+        <div class="field">
+          <label for="simDelay">Delay between events (ms)</label>
+          <input id="simDelay" type="number" min="0" max="5000" value="300" />
+        </div>
+        <div class="field">
+          <label for="simRetries">GET poll attempts (×500ms)</label>
+          <input id="simRetries" type="number" min="1" max="40" value="10" />
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn" id="runSim" type="button">Run full simulation</button>
+        <button class="btn secondary" id="simRegen" type="button">Regenerate UUIDs</button>
+      </div>
+
+      <label style="margin:16px 0 6px;">Simulation log</label>
+      <pre id="simLog">Idle. Click "Run full simulation" to start.</pre>
+
+      <label style="margin:16px 0 6px;">Final transcript (GET response)</label>
+      <div id="simGetStatus"><span class="status" id="simGetBadge">idle</span></div>
+      <pre id="simTranscript">No transcript fetched yet.</pre>
+    </div>
+
     <div class="panel">
       <div class="row">
         <div class="field">
@@ -273,6 +322,182 @@
       }
     }
 
+    // ─── Full session simulation ─────────────────────────────────────────────
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    function simLog(line) {
+      const el = $("simLog");
+      const ts = new Date().toLocaleTimeString();
+      if (el.textContent.startsWith("Idle")) el.textContent = "";
+      el.textContent += `[${ts}] ${line}\n`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    async function postEvent(payload) {
+      const res = await fetch("/api/v1/webhooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const text = await res.text();
+      return { ok: res.ok, status: res.status, text };
+    }
+
+    function startedPayload(meetingId, sessionId) {
+      return {
+        event: "meeting.started",
+        meeting: {
+          id: meetingId,
+          sessionId,
+          title: "Q4 Planning Sync",
+          roomName: "room-42",
+          status: "LIVE",
+          createdAt: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
+          organizedBy: { id: uuid(), name: "Alice Organizer" },
+        },
+      };
+    }
+
+    function transcriptPayload(meetingId, sessionId, seq) {
+      const speakers = ["Alice Organizer", "Bob Speaker", "Carol Analyst"];
+      const speaker = speakers[(seq - 1) % speakers.length];
+      // Offsets in whole seconds: each chunk spans ~4s, 1s gap between chunks.
+      const start = (seq - 1) * 5 + 1;
+      const end = start + 4;
+      return {
+        event: "meeting.transcript",
+        meeting: { id: meetingId, sessionId },
+        data: {
+          transcriptId: uuid(),
+          sequenceNumber: seq,
+          speaker: { id: uuid(), name: speaker },
+          content: `This is transcript chunk number ${seq} spoken by ${speaker}.`,
+          startOffset: String(start),
+          endOffset: String(end),
+          language: "en",
+        },
+      };
+    }
+
+    function endedPayload(meetingId, sessionId) {
+      return {
+        event: "meeting.ended",
+        meeting: {
+          id: meetingId,
+          sessionId,
+          title: "Q4 Planning Sync",
+          status: "LIVE",
+          createdAt: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          organizedBy: { id: uuid(), name: "Alice Organizer" },
+        },
+        reason: "HOST_ENDED_MEETING",
+      };
+    }
+
+    function setSimGetStatus(kind, text) {
+      const badge = $("simGetBadge");
+      badge.textContent = text;
+      badge.className = "status" + (kind ? " " + kind : "");
+    }
+
+    async function pollTranscript(meetingId, sessionId, attempts, expectedChunks) {
+      const url = `/api/v1/meetings/${meetingId}/sessions/${sessionId}/transcript`;
+      simLog(`Polling GET ${url}`);
+      for (let i = 1; i <= attempts; i++) {
+        try {
+          const res = await fetch(url);
+          const text = await res.text();
+          if (res.ok) {
+            const body = JSON.parse(text);
+            const count = body.segmentCount ?? (body.entries ? body.entries.length : 0);
+            // Wait until all chunks are processed and the session is ENDED (reconstructed).
+            if (count >= expectedChunks && body.status === "ENDED") {
+              setSimGetStatus("ok", `HTTP ${res.status} · ${count} segments · ${body.status}`);
+              $("simTranscript").textContent = JSON.stringify(body, null, 2);
+              simLog(`Transcript ready: ${count} segments, status=${body.status}, uri=${body.transcriptUri || "(none)"}`);
+              return true;
+            }
+            simLog(`Attempt ${i}/${attempts}: ${count}/${expectedChunks} segments, status=${body.status} — waiting…`);
+          } else if (res.status === 404) {
+            simLog(`Attempt ${i}/${attempts}: 404 not found yet — waiting…`);
+          } else {
+            simLog(`Attempt ${i}/${attempts}: HTTP ${res.status} — waiting…`);
+          }
+        } catch (e) {
+          simLog(`Attempt ${i}/${attempts}: fetch error ${e.message}`);
+        }
+        await sleep(500);
+      }
+      // Final best-effort fetch to show whatever is there.
+      try {
+        const res = await fetch(url);
+        const text = await res.text();
+        setSimGetStatus(res.ok ? "ok" : "err", `HTTP ${res.status} (timed out waiting for full transcript)`);
+        $("simTranscript").textContent = res.ok ? JSON.stringify(JSON.parse(text), null, 2) : text;
+      } catch (e) {
+        setSimGetStatus("err", "fetch failed");
+        $("simTranscript").textContent = "Failed to fetch transcript: " + e.message;
+      }
+      return false;
+    }
+
+    async function runSimulation() {
+      const meetingId = $("simMeetingId").value.trim();
+      const sessionId = $("simSessionId").value.trim();
+      const chunks = Math.max(1, parseInt($("simChunks").value, 10) || 1);
+      const delay = Math.max(0, parseInt($("simDelay").value, 10) || 0);
+      const attempts = Math.max(1, parseInt($("simRetries").value, 10) || 1);
+
+      $("runSim").disabled = true;
+      $("simLog").textContent = "";
+      $("simTranscript").textContent = "Running…";
+      setSimGetStatus("", "running…");
+
+      try {
+        simLog(`Starting simulation. meetingId=${meetingId} sessionId=${sessionId} chunks=${chunks}`);
+
+        // 1. meeting.started
+        let r = await postEvent(startedPayload(meetingId, sessionId));
+        simLog(`meeting.started → HTTP ${r.status}${r.ok ? "" : " " + r.text}`);
+        if (!r.ok) throw new Error("meeting.started failed");
+        await sleep(delay);
+
+        // 2. transcript chunks
+        for (let seq = 1; seq <= chunks; seq++) {
+          r = await postEvent(transcriptPayload(meetingId, sessionId, seq));
+          simLog(`meeting.transcript #${seq} → HTTP ${r.status}${r.ok ? "" : " " + r.text}`);
+          if (!r.ok) throw new Error(`transcript #${seq} failed`);
+          await sleep(delay);
+        }
+
+        // 3. meeting.ended
+        r = await postEvent(endedPayload(meetingId, sessionId));
+        simLog(`meeting.ended → HTTP ${r.status}${r.ok ? "" : " " + r.text}`);
+        if (!r.ok) throw new Error("meeting.ended failed");
+
+        // 4. Poll the read endpoint until the transcript is complete + reconstructed.
+        simLog("All events accepted. Waiting for async processing…");
+        await sleep(Math.max(delay, 300));
+        await pollTranscript(meetingId, sessionId, attempts, chunks);
+      } catch (e) {
+        simLog("Simulation aborted: " + e.message);
+        setSimGetStatus("err", "aborted");
+      } finally {
+        $("runSim").disabled = false;
+      }
+    }
+
+    function simRegen() {
+      $("simMeetingId").value = uuid();
+      $("simSessionId").value = uuid();
+    }
+
+    $("runSim").addEventListener("click", runSimulation);
+    $("simRegen").addEventListener("click", simRegen);
+
     // Wire up events.
     $("event").addEventListener("change", loadPresetIntoTextarea);
     $("meetingId").addEventListener("change", syncFieldsIntoPayload);
@@ -286,6 +511,7 @@
     $("meetingId").value = uuid();
     $("sessionId").value = uuid();
     loadPresetIntoTextarea();
+    simRegen();
   </script>
 </body>
 </html>
