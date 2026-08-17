@@ -71,10 +71,11 @@
 - [x] Valid `meeting.started` → 202
 - [x] Missing signature → 401
 - [x] Malformed JSON → 400 with meaningful message
-- [ ] Kafka UI shows message in `meeting.events` with correct key
-- [ ] Correlation ID present in logs
+- [x] Kafka UI shows message in `meeting.events` with correct key
+- [x] Correlation ID present in logs
 - [x] Unit tests: validation, HMAC logic
 - [x] Integration test: HTTP → Kafka
+- [x] Manual testing UI served at `/webhook-tester.html` (static page for posting sample payloads)
 
 ---
 
@@ -83,20 +84,20 @@
 **Objective:** Consume events, handle `meeting.started` and `meeting.ended`.
 
 ### Implementation
-- [ ] `MeetingEventConsumer` with `@KafkaListener` on `meeting.events`
-- [ ] Route by `event` field → `MeetingService`
-- [ ] `meeting.started`: upsert Meeting, create Session (LIVE)
-- [ ] `meeting.ended`: set status ENDED + `endedAt`, publish reconstruct task
-- [ ] Idempotency: skip if already applied
-- [ ] `DefaultErrorHandler` with backoff (1s, 5s, 30s) + `DeadLetterPublishingRecoverer`
+- [x] `MeetingEventConsumer` with `@KafkaListener` on `meeting.events`
+- [x] Route by `eventType` header → `MeetingService`
+- [x] `meeting.started`: upsert Meeting, create Session (LIVE)
+- [x] `meeting.ended`: set status ENDED + `endedAt`, publish reconstruct task
+- [x] Idempotency: skip if already applied
+- [x] `DefaultErrorHandler` with backoff (configurable; prod 1s/5s/30s) + `DeadLetterPublishingRecoverer`
 
 ### Validation
-- [ ] `meeting.started` → Meeting + Session rows created
-- [ ] Duplicate `meeting.started` → no error, no duplicate rows
-- [ ] `meeting.ended` → status ENDED in DB
-- [ ] `meeting.ended` for unknown session → DLQ after retries
-- [ ] Reconstruct task visible in `transcript.reconstruct`
-- [ ] Unit + integration tests pass
+- [x] `meeting.started` → Meeting + Session rows created
+- [x] Duplicate `meeting.started` → no error, no duplicate rows
+- [x] `meeting.ended` → status ENDED in DB
+- [x] `meeting.ended` for unknown session → DLQ after retries
+- [x] Reconstruct task visible in `transcript.reconstruct`
+- [x] Unit + integration tests pass
 
 ---
 

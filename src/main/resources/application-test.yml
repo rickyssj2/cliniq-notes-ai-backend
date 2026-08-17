@@ -24,6 +24,12 @@ app:
     hmac-secret: test-secret
   storage:
     base-path: ./target/test-transcripts
+  kafka:
+    retry:
+      initial-interval-ms: 200
+      multiplier: 2.0
+      max-interval-ms: 500
+      max-attempts: 2
 
 logging:
   level:

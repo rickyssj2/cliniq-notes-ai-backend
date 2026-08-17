@@ -14,7 +14,9 @@ spring:
   jpa:
     show-sql: true
 
-# Signature verification off by default for local dev convenience (simulation script sends no signature)
+# Local development only: skip HMAC signature verification so the test UI and
+# curl can post events without computing a signature. Production keeps the
+# base default (signature-verification-enabled: true) and remains fail-closed.
 app:
   webhook:
     signature-verification-enabled: false
@@ -23,10 +25,3 @@ logging:
   level:
     ai.soulside: DEBUG
     org.springframework.kafka: INFO
-
-# Local development only: skip HMAC signature verification so the test UI and
-# curl can post events without computing a signature. Production keeps the
-# base default (signature-verification-enabled: true) and remains fail-closed.
-app:
-  webhook:
-    signature-verification-enabled: false
