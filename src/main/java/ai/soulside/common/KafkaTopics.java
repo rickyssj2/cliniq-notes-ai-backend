@@ -16,4 +16,7 @@ public final class KafkaTopics {
 
     /** Dead-letter topic for events that exhaust retries. */
     public static final String MEETING_EVENTS_DLT = "meeting.events.DLT";
+
+    /** Dead-letter topic for reconstruction tasks that exhaust retries. */
+    public static final String TRANSCRIPT_RECONSTRUCT_DLT = "transcript.reconstruct.DLT";
 }

@@ -86,8 +86,8 @@ class RepositoryIntegrationTest {
                 .sequenceNumber(3)
                 .speakerName("Bob")
                 .content("Third chunk")
-                .startOffset("00:00:10")
-                .endOffset("00:00:15")
+                .startOffset(10)
+                .endOffset(15)
                 .build());
 
         transcriptSegmentRepository.save(TranscriptSegment.builder()
@@ -96,8 +96,8 @@ class RepositoryIntegrationTest {
                 .sequenceNumber(1)
                 .speakerName("Alice")
                 .content("First chunk")
-                .startOffset("00:00:00")
-                .endOffset("00:00:05")
+                .startOffset(0)
+                .endOffset(5)
                 .build());
 
         transcriptSegmentRepository.save(TranscriptSegment.builder()
@@ -106,8 +106,8 @@ class RepositoryIntegrationTest {
                 .sequenceNumber(2)
                 .speakerName("Alice")
                 .content("Second chunk")
-                .startOffset("00:00:05")
-                .endOffset("00:00:10")
+                .startOffset(5)
+                .endOffset(10)
                 .build());
 
         // Query should return ordered by sequence_number
@@ -144,8 +144,8 @@ class RepositoryIntegrationTest {
                 .sequenceNumber(1)
                 .speakerName("Alice")
                 .content("Hello")
-                .startOffset("0")
-                .endOffset("3")
+                .startOffset(0)
+                .endOffset(3)
                 .build());
 
         // Duplicate transcript_id should throw
@@ -155,8 +155,8 @@ class RepositoryIntegrationTest {
                 .sequenceNumber(1)
                 .speakerName("Alice")
                 .content("Hello again")
-                .startOffset("0")
-                .endOffset("3")
+                .startOffset(0)
+                .endOffset(3)
                 .build();
 
         assertThatThrownBy(() -> {
@@ -189,8 +189,8 @@ class RepositoryIntegrationTest {
                 .sequenceNumber(1)
                 .speakerName("Bob")
                 .content("Check exists")
-                .startOffset("0")
-                .endOffset("2")
+                .startOffset(0)
+                .endOffset(2)
                 .build());
 
         assertThat(transcriptSegmentRepository.existsByTranscriptId(transcriptId)).isTrue();

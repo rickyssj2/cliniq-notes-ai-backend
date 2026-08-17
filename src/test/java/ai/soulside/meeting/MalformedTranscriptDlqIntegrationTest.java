@@ -27,8 +27,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Verifies that an event which keeps failing (meeting.ended for a session that was never
- * started) is retried and eventually published to the dead-letter topic.
+ * A structurally invalid transcript (missing {@code data}) should fail fast with a non-retryable
+ * {@link IllegalArgumentException} and dead-letter promptly, rather than exhausting the retry cycle.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         KafkaTopics.MEETING_EVENTS_DLT,
         KafkaTopics.TRANSCRIPT_RECONSTRUCT
 })
-class DeadLetterIntegrationTest {
+class MalformedTranscriptDlqIntegrationTest {
 
     @Autowired
     private KafkaTemplate<String, String> kafkaTemplate;
@@ -49,7 +49,7 @@ class DeadLetterIntegrationTest {
     @BeforeEach
     void setUp() {
         Map<String, Object> props =
-                KafkaTestUtils.consumerProps("dlt-consumer", "true", embeddedKafka);
+                KafkaTestUtils.consumerProps("malformed-dlt-consumer", "true", embeddedKafka);
         dltConsumer = new DefaultKafkaConsumerFactory<>(
                 props, new StringDeserializer(), new StringDeserializer()).createConsumer();
         embeddedKafka.consumeFromAnEmbeddedTopic(dltConsumer, KafkaTopics.MEETING_EVENTS_DLT);
@@ -63,35 +63,34 @@ class DeadLetterIntegrationTest {
     }
 
     @Test
-    void meetingEndedForUnknownSessionLandsInDlq() {
+    void malformedTranscriptDeadLettersFast() {
         UUID sessionId = UUID.randomUUID();
+        // Valid envelope + eventType, but no "data" block — will NPE without the guard.
         String payload = """
-                { "event": "meeting.ended",
-                  "meeting": { "id": "%s", "sessionId": "%s", "title": "Ghost",
-                    "endedAt": "2024-12-13T07:04:37.052Z" },
-                  "reason": "HOST_ENDED_MEETING" }
+                { "event": "meeting.transcript",
+                  "meeting": { "id": "%s", "sessionId": "%s" } }
                 """.formatted(UUID.randomUUID(), sessionId);
 
         ProducerRecord<String, String> record =
                 new ProducerRecord<>(KafkaTopics.MEETING_EVENTS, sessionId.toString(), payload);
         record.headers().add(new RecordHeader("eventType",
-                "meeting.ended".getBytes(StandardCharsets.UTF_8)));
+                "meeting.transcript".getBytes(StandardCharsets.UTF_8)));
         kafkaTemplate.send(record);
 
-        // Retries with backoff then DLQ. Poll until we see the record for *this* session,
-        // ignoring any unrelated records another test may have left on the shared DLT topic.
-        ConsumerRecord<String, String> dltRecord =
-                awaitDlqRecordForKey(sessionId.toString());
+        long start = System.currentTimeMillis();
+        ConsumerRecord<String, String> dltRecord = awaitDlqRecordForKey(sessionId.toString());
+        long elapsed = System.currentTimeMillis() - start;
 
-        assertThat(dltRecord.value()).contains(sessionId.toString());
         assertThat(dltRecord.key()).isEqualTo(sessionId.toString());
+        // Non-retryable => should dead-letter well before the retry budget would elapse.
+        assertThat(elapsed).isLessThan(5_000);
     }
 
     private ConsumerRecord<String, String> awaitDlqRecordForKey(String key) {
-        long deadline = System.currentTimeMillis() + Duration.ofSeconds(30).toMillis();
+        long deadline = System.currentTimeMillis() + Duration.ofSeconds(10).toMillis();
         while (System.currentTimeMillis() < deadline) {
             ConsumerRecords<String, String> records =
-                    KafkaTestUtils.getRecords(dltConsumer, Duration.ofSeconds(2));
+                    KafkaTestUtils.getRecords(dltConsumer, Duration.ofSeconds(1));
             for (ConsumerRecord<String, String> r : records) {
                 if (key.equals(r.key())) {
                     return r;

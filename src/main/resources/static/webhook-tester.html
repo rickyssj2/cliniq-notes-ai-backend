@@ -174,7 +174,8 @@
         base.startedAt = nowIso;
         base.meeting.organizedBy = { id: uuid(), name: "Alice Organizer" };
       } else if (event === "meeting.transcript") {
-        base.transcript = {
+        // Must be "data" (not "transcript") to match MeetingTranscriptEvent.
+        base.data = {
           transcriptId: uuid(),
           sequenceNumber: 1,
           speaker: { id: uuid(), name: "Bob Speaker" },

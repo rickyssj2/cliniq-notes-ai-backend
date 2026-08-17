@@ -40,9 +40,10 @@ public class KafkaConsumerConfig {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
                 kafkaTemplate,
                 (record, exception) -> {
-                    log.error("Publishing to DLQ. topic={} partition={} offset={} cause={}",
+                    Throwable rootCause = rootCause(exception);
+                    log.error("Publishing to DLQ. topic={} partition={} offset={} cause={}: {}",
                             record.topic(), record.partition(), record.offset(),
-                            exception.getMessage());
+                            rootCause.getClass().getSimpleName(), rootCause.getMessage());
                     return new TopicPartition(record.topic() + ".DLT", record.partition());
                 });
 
@@ -61,5 +62,14 @@ public class KafkaConsumerConfig {
                 IllegalArgumentException.class);
 
         return handler;
+    }
+
+    /** Unwrap listener/wrapper exceptions to the underlying cause for clearer DLQ triage. */
+    private static Throwable rootCause(Throwable t) {
+        Throwable current = t;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
     }
 }

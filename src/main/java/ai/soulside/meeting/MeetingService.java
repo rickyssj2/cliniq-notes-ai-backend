@@ -45,7 +45,14 @@ public class MeetingService {
      */
     @Transactional
     public void handleMeetingStarted(MeetingStartedEvent event) {
+        if (event == null || event.meeting() == null) {
+            throw new IllegalArgumentException("meeting.started event missing meeting payload");
+        }
         MeetingStartedEvent.MeetingPayload payload = event.meeting();
+        if (payload.id() == null || payload.sessionId() == null) {
+            throw new IllegalArgumentException(
+                    "meeting.started event missing meeting.id or meeting.sessionId");
+        }
         UUID meetingId = payload.id();
         UUID sessionId = payload.sessionId();
 
@@ -74,6 +81,9 @@ public class MeetingService {
      */
     @Transactional
     public void handleMeetingEnded(MeetingEndedEvent event) {
+        if (event == null || event.meeting() == null || event.meeting().sessionId() == null) {
+            throw new IllegalArgumentException("meeting.ended event missing meeting.sessionId");
+        }
         MeetingEndedEvent.MeetingPayload payload = event.meeting();
         UUID sessionId = payload.sessionId();
 

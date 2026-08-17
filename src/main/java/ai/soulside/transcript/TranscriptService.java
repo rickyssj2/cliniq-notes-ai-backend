@@ -37,6 +37,8 @@ public class TranscriptService {
 
     @Transactional
     public void handleTranscript(MeetingTranscriptEvent event) {
+        validate(event);
+
         MeetingTranscriptEvent.TranscriptData data = event.data();
         UUID transcriptId = data.transcriptId();
         UUID sessionId = event.meeting().sessionId();
@@ -62,8 +64,8 @@ public class TranscriptService {
                 .speakerId(data.speaker() != null ? data.speaker().id() : null)
                 .speakerName(data.speaker() != null ? data.speaker().name() : null)
                 .content(data.content())
-                .startOffset(data.startOffset())
-                .endOffset(data.endOffset())
+                .startOffset(OffsetParser.parseToSeconds(data.startOffset()))
+                .endOffset(OffsetParser.parseToSeconds(data.endOffset()))
                 .language(data.language() != null ? data.language() : "en")
                 .build();
 
@@ -74,6 +76,36 @@ public class TranscriptService {
         } catch (DataIntegrityViolationException e) {
             // Lost a race with a concurrent identical delivery — the row already exists.
             log.info("Concurrent duplicate transcript segment ignored. transcriptId={}", transcriptId);
+        }
+    }
+
+    /**
+     * Reject structurally invalid payloads up front with a clear, non-retryable
+     * {@link IllegalArgumentException}. Without this, a null field would surface as an opaque NPE
+     * only after the full retry cycle is exhausted; failing fast dead-letters immediately.
+     */
+    private void validate(MeetingTranscriptEvent event) {
+        if (event == null) {
+            throw new IllegalArgumentException("Transcript event is null");
+        }
+        if (event.meeting() == null || event.meeting().sessionId() == null) {
+            throw new IllegalArgumentException("Transcript event missing meeting.sessionId");
+        }
+        MeetingTranscriptEvent.TranscriptData data = event.data();
+        if (data == null) {
+            throw new IllegalArgumentException("Transcript event missing data");
+        }
+        if (data.transcriptId() == null) {
+            throw new IllegalArgumentException("Transcript event missing data.transcriptId");
+        }
+        if (data.sequenceNumber() == null) {
+            throw new IllegalArgumentException("Transcript event missing data.sequenceNumber");
+        }
+        if (data.content() == null) {
+            throw new IllegalArgumentException("Transcript event missing data.content");
+        }
+        if (data.startOffset() == null || data.endOffset() == null) {
+            throw new IllegalArgumentException("Transcript event missing data.startOffset/endOffset");
         }
     }
 }

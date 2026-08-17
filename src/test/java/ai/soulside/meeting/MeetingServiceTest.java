@@ -125,6 +125,30 @@ class MeetingServiceTest {
     }
 
     @Test
+    void meetingStartedWithNullMeetingThrowsIllegalArgument() {
+        MeetingStartedEvent bad = new MeetingStartedEvent("meeting.started", null);
+
+        assertThatThrownBy(() -> meetingService.handleMeetingStarted(bad))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(meetingRepository, sessionRepository);
+    }
+
+    @Test
+    void meetingEndedWithNullSessionIdThrowsIllegalArgument() {
+        MeetingEndedEvent bad = new MeetingEndedEvent("meeting.ended",
+                new MeetingEndedEvent.MeetingPayload(
+                        meetingId, null, "T", "LIVE", null, null, null, null),
+                "HOST_ENDED_MEETING");
+
+        assertThatThrownBy(() -> meetingService.handleMeetingEnded(bad))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sessionId");
+
+        verifyNoInteractions(sessionRepository, reconstructTaskProducer);
+    }
+
+    @Test
     void meetingEndedForUnknownSessionThrows() {
         when(sessionRepository.findById(sessionId)).thenReturn(Optional.empty());
 

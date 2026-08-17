@@ -43,11 +43,13 @@ public class TranscriptSegment {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
-    @Column(name = "start_offset", nullable = false, length = 50)
-    private String startOffset;
+    /** Offset from session start, in whole seconds. */
+    @Column(name = "start_offset", nullable = false)
+    private Integer startOffset;
 
-    @Column(name = "end_offset", nullable = false, length = 50)
-    private String endOffset;
+    /** Offset from session start, in whole seconds. */
+    @Column(name = "end_offset", nullable = false)
+    private Integer endOffset;
 
     @Column(length = 10)
     @Builder.Default

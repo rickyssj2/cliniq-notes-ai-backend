@@ -40,4 +40,12 @@ public class KafkaTopicConfig {
                 .replicas(1)
                 .build();
     }
+
+    @Bean
+    public NewTopic transcriptReconstructDltTopic() {
+        return TopicBuilder.name(KafkaTopics.TRANSCRIPT_RECONSTRUCT_DLT)
+                .partitions(1)
+                .replicas(1)
+                .build();
+    }
 }

@@ -96,6 +96,48 @@ class TranscriptServiceTest {
     }
 
     @Test
+    void rejectsNullDataWithIllegalArgument() {
+        MeetingTranscriptEvent bad = new MeetingTranscriptEvent(
+                "meeting.transcript",
+                new MeetingTranscriptEvent.MeetingRef(UUID.randomUUID(), sessionId),
+                null);
+
+        assertThatThrownBy(() -> transcriptService.handleTranscript(bad))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("data");
+
+        verifyNoInteractions(segmentRepository);
+    }
+
+    @Test
+    void rejectsNullMeetingWithIllegalArgument() {
+        MeetingTranscriptEvent bad = new MeetingTranscriptEvent(
+                "meeting.transcript", null,
+                new MeetingTranscriptEvent.TranscriptData(
+                        transcriptId, 1, null, "content", "0", "5", "en"));
+
+        assertThatThrownBy(() -> transcriptService.handleTranscript(bad))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sessionId");
+    }
+
+    @Test
+    void rejectsMissingRequiredDataFieldsWithIllegalArgument() {
+        // Missing transcriptId
+        MeetingTranscriptEvent bad = new MeetingTranscriptEvent(
+                "meeting.transcript",
+                new MeetingTranscriptEvent.MeetingRef(UUID.randomUUID(), sessionId),
+                new MeetingTranscriptEvent.TranscriptData(
+                        null, 1, null, "content", "0", "5", "en"));
+
+        assertThatThrownBy(() -> transcriptService.handleTranscript(bad))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("transcriptId");
+
+        verifyNoInteractions(segmentRepository);
+    }
+
+    @Test
     void defaultsLanguageToEnWhenMissing() {
         Session session = Session.builder().id(sessionId)
                 .status(SessionStatus.LIVE).startedAt(Instant.now()).build();

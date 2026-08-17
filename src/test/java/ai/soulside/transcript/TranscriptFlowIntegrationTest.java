@@ -134,6 +134,7 @@ class TranscriptFlowIntegrationTest {
         assertThat(s.getSpeakerId())
                 .isEqualTo(UUID.fromString("70c5d391-5bca-4cf3-9907-bec205798adb"));
         assertThat(s.getLanguage()).isEqualTo("en");
-        assertThat(s.getStartOffset()).isEqualTo("00:00:01");
+        // "00:00:01" parses to 1 second
+        assertThat(s.getStartOffset()).isEqualTo(1);
     }
 }

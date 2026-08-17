@@ -40,6 +40,10 @@ public class Session {
     @Column(name = "ended_at")
     private Instant endedAt;
 
+    /** URI of the assembled transcript, set once the session is reconstructed. */
+    @Column(name = "transcript_uri", length = 1024)
+    private String transcriptUri;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
