@@ -218,16 +218,16 @@
 **Objective:** README, architecture doc, submission-ready repo.
 
 ### Implementation
-- [ ] README: quick start, architecture diagram, trade-offs, future work, test instructions
-- [ ] Formatting cleanup, remove dead code, Javadoc on public APIs
-- [ ] `./mvnw clean verify` green
-- [ ] Simulation scripts committed (provided + custom edge cases)
+- [x] README: quick start, architecture diagram, trade-offs, future work, test instructions
+- [x] Formatting cleanup, no dead code, Javadoc on public APIs; fixed tester preset payload shapes
+- [x] `./mvnw clean verify` green (61 tests + bootable jar)
+- [x] Simulation scripts committed (provided + custom edge cases) and referenced from README
 
 ### Validation
-- [ ] Fresh clone → `docker-compose up` → healthy
-- [ ] Simulation script → all 202s
-- [ ] GET transcript correct
-- [ ] `./mvnw test` passes
-- [ ] README complete
-- [ ] Kafka UI shows topics + DLQ
-- [ ] Grafana shows simulation metrics
+- [ ] Fresh clone → `docker compose up` → healthy (needs manual run against Docker)
+- [ ] Simulation script → all 202s (needs running stack)
+- [x] GET transcript correct (integration tests)
+- [x] `./mvnw test` passes (61 tests)
+- [x] README complete
+- [ ] Kafka UI shows topics + DLQ (needs running stack)
+- [ ] Grafana shows simulation metrics (needs running stack)

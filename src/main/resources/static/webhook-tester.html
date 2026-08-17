@@ -246,22 +246,27 @@
       };
 
       if (event === "meeting.started") {
-        base.startedAt = nowIso;
+        // startedAt/createdAt live inside meeting to match MeetingStartedEvent.
+        base.meeting.status = "LIVE";
+        base.meeting.createdAt = nowIso;
+        base.meeting.startedAt = nowIso;
         base.meeting.organizedBy = { id: uuid(), name: "Alice Organizer" };
       } else if (event === "meeting.transcript") {
         // Must be "data" (not "transcript") to match MeetingTranscriptEvent.
+        // Offsets are relative seconds; plain seconds or HH:MM:SS[.mmm] both work.
         base.data = {
           transcriptId: uuid(),
           sequenceNumber: 1,
           speaker: { id: uuid(), name: "Bob Speaker" },
           content: "Hello everyone, thanks for joining the call today.",
-          startOffset: "00:00:01.000",
-          endOffset: "00:00:04.500",
+          startOffset: "1",
+          endOffset: "4",
           language: "en",
         };
       } else if (event === "meeting.ended") {
-        base.endedAt = nowIso;
-        base.durationSeconds = 1834;
+        // endedAt lives inside meeting to match MeetingEndedEvent; reason is top-level.
+        base.meeting.endedAt = nowIso;
+        base.reason = "HOST_ENDED_MEETING";
       }
       return base;
     }
