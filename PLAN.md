@@ -148,18 +148,18 @@
 
 ### Implementation
 - [ ] `GET /api/v1/meetings/{meetingId}/sessions/{sessionId}/transcript`
-- [ ] Fast path: assembled transcript from storage
-- [ ] Fallback: order segments from DB on the fly
-- [ ] JSON response with session metadata + ordered entries
-- [ ] 404 for unknown meeting/session
-- [ ] Optional pagination for segment view
+- [x] Structured entries always sourced from DB (ordered), uniform for LIVE + ENDED
+- [x] Stored file `transcriptUri` referenced in the response (not reverse-parsed)
+- [x] JSON response with session metadata + ordered entries
+- [x] 404 for unknown meeting/session
+- [ ] Optional pagination for segment view (deferred; not needed at current scale)
 
 ### Validation
-- [ ] Full simulation → GET returns complete transcript
-- [ ] Unknown session → 404 with meaningful message
-- [ ] Active session (no file yet) → segments from DB in order
-- [ ] Response includes speakers, content, offsets
-- [ ] Unit + integration tests pass
+- [x] Full simulation → GET returns complete transcript
+- [x] Unknown session → 404 with meaningful message
+- [x] Active (LIVE) session → segments from DB in order
+- [x] Response includes speakers, content, offsets
+- [x] Unit + integration tests pass
 
 ---
 

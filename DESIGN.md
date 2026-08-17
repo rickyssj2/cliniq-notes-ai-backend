@@ -51,6 +51,9 @@ while building the service. It is updated at the end of each phase.
 Failures in either consumer are retried with backoff by a `DefaultErrorHandler`, then routed to
 a `<topic>.DLT` dead-letter topic.
 
+**Read path:** `GET /api/v1/meetings/{id}/sessions/{sessionId}/transcript` →
+`MeetingReadController` → `TranscriptQueryService` → ordered segments from PostgreSQL → JSON.
+
 ### Layering / Package Structure
 
 | Package      | Responsibility                                             |
@@ -200,6 +203,26 @@ correctly. Partition keying by sessionId makes out-of-order delivery rare in pra
 
 ---
 
+## Read API
+
+- **Endpoint:** `GET /api/v1/meetings/{meetingId}/sessions/{sessionId}/transcript`.
+- **Ownership check:** the session must exist *and* belong to the given meeting
+  (`findByIdAndMeetingId`); otherwise 404 with a meaningful message. This prevents leaking a valid
+  session under the wrong meeting id.
+- **Source of truth is the DB, not the file.** The structured `entries` are always loaded from
+  `transcript_segments` ordered by `sequenceNumber`. This works uniformly whether the session is
+  LIVE (still accumulating; no file yet) or ENDED (already reconstructed). The stored artifact's
+  `transcriptUri` is included as a reference for consumers that want the assembled text file, but
+  the API does not reverse-parse that file — round-tripping a denormalized artifact back into
+  structured data would be fragile and redundant.
+- **Response shape:** session metadata (meeting id/title, status, started/ended, transcriptUri,
+  segment count) plus an ordered list of entries (sequenceNumber, speaker id/name, content,
+  start/end offset seconds, language). Records/DTOs keep the domain entities out of the HTTP layer.
+- **Pagination** is deferred — sessions hold a bounded number of segments at current scale. If
+  needed, the ordered query already supports it via a `Pageable` overload.
+
+---
+
 ## Observability
 
 - **Correlation IDs:** `CorrelationIdFilter` mints/propagates `X-Correlation-Id` into the MDC and
@@ -234,7 +257,6 @@ correctly. Partition keying by sessionId makes out-of-order delivery rare in pra
 
 ## Deferred / Future Work
 
-- Read API: `GET .../transcript` (Phase 7).
 - Custom metrics + Grafana dashboard (Phase 8).
 - Broader edge-case suite: out-of-order, late transcript after end, concurrent sessions (Phase 9).
 - README, architecture diagram, final polish (Phase 10).
