@@ -14,6 +14,11 @@ spring:
   jpa:
     show-sql: true
 
+# Signature verification off by default for local dev convenience (simulation script sends no signature)
+app:
+  webhook:
+    signature-verification-enabled: false
+
 logging:
   level:
     ai.soulside: DEBUG

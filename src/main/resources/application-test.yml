@@ -18,6 +18,13 @@ spring:
   kafka:
     bootstrap-servers: ${spring.embedded.kafka.brokers:localhost:9092}
 
+app:
+  webhook:
+    signature-verification-enabled: false
+    hmac-secret: test-secret
+  storage:
+    base-path: ./target/test-transcripts
+
 logging:
   level:
     ai.soulside: DEBUG

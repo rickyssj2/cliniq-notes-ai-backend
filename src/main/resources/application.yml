@@ -51,6 +51,7 @@ logging:
 # App-specific config
 app:
   webhook:
+    signature-verification-enabled: ${WEBHOOK_SIGNATURE_ENABLED:true}
     hmac-secret: ${WEBHOOK_HMAC_SECRET:change-me-in-production}
   storage:
     base-path: ./data/transcripts

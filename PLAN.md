@@ -49,7 +49,7 @@
 
 ### Validation
 - [x] Flyway creates all tables on startup
-- [ ] Table structure verified in psql
+- [x] Table structure verified in psql
 - [x] Duplicate `transcript_id` insert rejected by constraint
 - [x] Repository query tests pass
 
@@ -60,21 +60,21 @@
 **Objective:** Validate payloads, verify HMAC, publish to Kafka, return 202.
 
 ### Implementation
-- [ ] `WebhookController` at `POST /api/v1/webhooks`
-- [ ] Request DTOs per event type with Jakarta validation
-- [ ] HMAC-SHA256 signature verification (configurable secret)
-- [ ] `KafkaProducerService` → `meeting.events`, key = sessionId
-- [ ] Correlation ID minted at controller, added to Kafka headers + MDC
-- [ ] 202 / 400 / 401 response handling
+- [x] `WebhookController` at `POST /api/v1/webhooks`
+- [x] Request DTOs per event type with Jakarta validation
+- [x] HMAC-SHA256 signature verification (configurable secret, fail-closed)
+- [x] `KafkaProducerService` → `meeting.events`, key = sessionId
+- [x] Correlation ID minted at controller (filter), added to Kafka headers + MDC
+- [x] 202 / 400 / 401 response handling
 
 ### Validation
-- [ ] Valid `meeting.started` → 202
-- [ ] Missing signature → 401
-- [ ] Malformed JSON → 400 with meaningful message
+- [x] Valid `meeting.started` → 202
+- [x] Missing signature → 401
+- [x] Malformed JSON → 400 with meaningful message
 - [ ] Kafka UI shows message in `meeting.events` with correct key
 - [ ] Correlation ID present in logs
-- [ ] Unit tests: validation, HMAC logic
-- [ ] Integration test: HTTP → Kafka
+- [x] Unit tests: validation, HMAC logic
+- [x] Integration test: HTTP → Kafka
 
 ---
 

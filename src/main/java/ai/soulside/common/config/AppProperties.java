@@ -25,6 +25,13 @@ public class AppProperties {
     @Setter
     public static class Webhook {
 
+        /**
+         * Whether inbound HMAC-SHA256 signatures are verified. When {@code true},
+         * requests without a valid signature are rejected (fail-closed). Can be
+         * disabled for local development.
+         */
+        private boolean signatureVerificationEnabled = true;
+
         /** Shared secret used to verify inbound HMAC-SHA256 signatures. */
         @NotBlank
         private String hmacSecret;
