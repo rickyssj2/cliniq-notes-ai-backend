@@ -4,6 +4,8 @@ import ai.soulside.common.CorrelationId;
 import ai.soulside.common.KafkaTopics;
 import ai.soulside.meeting.event.MeetingEndedEvent;
 import ai.soulside.meeting.event.MeetingStartedEvent;
+import ai.soulside.transcript.TranscriptService;
+import ai.soulside.transcript.event.MeetingTranscriptEvent;
 import ai.soulside.webhook.dto.WebhookEventType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,10 +31,14 @@ public class MeetingEventConsumer {
     private static final Logger log = LoggerFactory.getLogger(MeetingEventConsumer.class);
 
     private final MeetingService meetingService;
+    private final TranscriptService transcriptService;
     private final ObjectMapper objectMapper;
 
-    public MeetingEventConsumer(MeetingService meetingService, ObjectMapper objectMapper) {
+    public MeetingEventConsumer(MeetingService meetingService,
+                                TranscriptService transcriptService,
+                                ObjectMapper objectMapper) {
         this.meetingService = meetingService;
+        this.transcriptService = transcriptService;
         this.objectMapper = objectMapper;
     }
 
@@ -58,10 +64,8 @@ public class MeetingEventConsumer {
                         objectMapper.readValue(rawPayload, MeetingStartedEvent.class));
                 case MEETING_ENDED -> meetingService.handleMeetingEnded(
                         objectMapper.readValue(rawPayload, MeetingEndedEvent.class));
-                case MEETING_TRANSCRIPT -> {
-                    // Handled by the transcript consumer in Phase 5.
-                    log.debug("Transcript event received; handled separately. key={}", key);
-                }
+                case MEETING_TRANSCRIPT -> transcriptService.handleTranscript(
+                        objectMapper.readValue(rawPayload, MeetingTranscriptEvent.class));
             }
         } finally {
             MDC.remove(CorrelationId.MDC_KEY);

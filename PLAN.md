@@ -106,17 +106,17 @@
 **Objective:** Persist transcript segments idempotently with dedup.
 
 ### Implementation
-- [ ] Route `meeting.transcript` → `TranscriptService`
-- [ ] Upsert segment; on `transcript_id` conflict, log and skip
-- [ ] Store speaker (id + name), content, sequenceNumber, offsets, language
-- [ ] Session existence check; retry if session not yet created
+- [x] Route `meeting.transcript` → `TranscriptService`
+- [x] Upsert segment; on `transcript_id` conflict, log and skip (dedup + unique-constraint backstop)
+- [x] Store speaker (id + name), content, sequenceNumber, offsets, language
+- [x] Session existence check; retry (throw) if session not yet created
 
 ### Validation
-- [ ] started → transcript → segment in DB with correct data
-- [ ] Same transcript twice → one row, no error
-- [ ] 3 chunks with different sequence numbers → all stored, ordered
-- [ ] Transcript for non-existent session → retried
-- [ ] Unit + integration tests pass
+- [x] started → transcript → segment in DB with correct data
+- [x] Same transcript twice → one row, no error
+- [x] 3 chunks with different sequence numbers → all stored, ordered
+- [x] Transcript for non-existent session → retried (unit test; DLQ path shared with Phase 4)
+- [x] Unit + integration tests pass
 
 ---
 
