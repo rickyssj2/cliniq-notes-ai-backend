@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Webhook Tester</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #181b22;
+      --border: #2a2f3a;
+      --text: #e6e9ef;
+      --muted: #8b93a7;
+      --accent: #4f8cff;
+      --accent-hover: #6ba0ff;
+      --ok: #2ea043;
+      --err: #e5484d;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+    .field { flex: 1; min-width: 220px; margin-bottom: 16px; }
+    select, input, textarea {
+      width: 100%;
+      background: #0f1115;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 9px 11px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    textarea { font-family: var(--mono); min-height: 260px; resize: vertical; white-space: pre; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn.secondary:hover { border-color: var(--accent); }
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .status { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+    .status.ok { background: rgba(46,160,67,.15); color: #4ac26b; }
+    .status.err { background: rgba(229,72,77,.15); color: #ff6b6f; }
+    pre {
+      background: #0f1115;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow: auto;
+      margin: 12px 0 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    code { font-family: var(--mono); background: #0f1115; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Webhook Tester</h1>
+    <p class="sub">
+      Sends events to <code>POST /api/v1/webhooks</code>. HMAC verification is disabled in the
+      <code>local</code> profile, so no signature header is needed.
+    </p>
+
+    <div class="panel">
+      <div class="row">
+        <div class="field">
+          <label for="event">Event type</label>
+          <select id="event">
+            <option value="meeting.started">meeting.started</option>
+            <option value="meeting.transcript">meeting.transcript</option>
+            <option value="meeting.ended">meeting.ended</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="endpoint">Endpoint</label>
+          <input id="endpoint" value="/api/v1/webhooks" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="meetingId">meeting.id (UUID)</label>
+          <input id="meetingId" />
+        </div>
+        <div class="field">
+          <label for="sessionId">meeting.sessionId (UUID) — Kafka key</label>
+          <input id="sessionId" />
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-bottom:16px;">
+        <button class="btn secondary" id="regenIds" type="button">Regenerate UUIDs</button>
+        <button class="btn secondary" id="loadPreset" type="button">Reset payload from preset</button>
+      </div>
+
+      <div class="field" style="margin-bottom:8px;">
+        <label for="payload">JSON payload (editable)</label>
+        <textarea id="payload" spellcheck="false"></textarea>
+      </div>
+      <div class="hint">
+        The <code>event</code>, <code>meeting.id</code> and <code>meeting.sessionId</code> above are synced into
+        the payload when you change them or pick a preset. Edit the JSON freely for custom cases.
+      </div>
+
+      <div class="btn-row" style="margin-top:16px;">
+        <button class="btn" id="send" type="button">Send event</button>
+        <button class="btn secondary" id="format" type="button">Format JSON</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <label style="margin-bottom:10px;">Response</label>
+      <div id="statusLine"><span class="status" id="statusBadge">idle</span></div>
+      <pre id="response">No request sent yet.</pre>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function uuid() {
+      if (crypto.randomUUID) return crypto.randomUUID();
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+    }
+
+    // Build a well-formed payload for the given event type using the current ids.
+    function buildPreset(event, meetingId, sessionId) {
+      const nowIso = new Date().toISOString();
+      const base = {
+        event,
+        meeting: {
+          id: meetingId,
+          sessionId,
+          title: "Weekly Sync",
+          roomName: "room-42",
+        },
+      };
+
+      if (event === "meeting.started") {
+        base.startedAt = nowIso;
+        base.meeting.organizedBy = { id: uuid(), name: "Alice Organizer" };
+      } else if (event === "meeting.transcript") {
+        base.transcript = {
+          transcriptId: uuid(),
+          sequenceNumber: 1,
+          speaker: { id: uuid(), name: "Bob Speaker" },
+          content: "Hello everyone, thanks for joining the call today.",
+          startOffset: "00:00:01.000",
+          endOffset: "00:00:04.500",
+          language: "en",
+        };
+      } else if (event === "meeting.ended") {
+        base.endedAt = nowIso;
+        base.durationSeconds = 1834;
+      }
+      return base;
+    }
+
+    function currentIds() {
+      return { meetingId: $("meetingId").value.trim(), sessionId: $("sessionId").value.trim() };
+    }
+
+    function loadPresetIntoTextarea() {
+      const { meetingId, sessionId } = currentIds();
+      const obj = buildPreset($("event").value, meetingId, sessionId);
+      $("payload").value = JSON.stringify(obj, null, 2);
+    }
+
+    // Keep event/id fields in sync into the existing JSON without clobbering other edits.
+    function syncFieldsIntoPayload() {
+      try {
+        const obj = JSON.parse($("payload").value);
+        obj.event = $("event").value;
+        obj.meeting = obj.meeting || {};
+        obj.meeting.id = $("meetingId").value.trim();
+        obj.meeting.sessionId = $("sessionId").value.trim();
+        $("payload").value = JSON.stringify(obj, null, 2);
+      } catch (e) {
+        // Payload not valid JSON right now; rebuild from preset instead.
+        loadPresetIntoTextarea();
+      }
+    }
+
+    function regenIds() {
+      $("meetingId").value = uuid();
+      $("sessionId").value = uuid();
+      syncFieldsIntoPayload();
+    }
+
+    function setStatus(kind, text) {
+      const badge = $("statusBadge");
+      badge.textContent = text;
+      badge.className = "status" + (kind ? " " + kind : "");
+    }
+
+    async function send() {
+      const endpoint = $("endpoint").value.trim();
+      let body = $("payload").value;
+
+      // Validate JSON before sending so we fail fast client-side.
+      try {
+        JSON.parse(body);
+      } catch (e) {
+        setStatus("err", "invalid JSON");
+        $("response").textContent = "Payload is not valid JSON:\n" + e.message;
+        return;
+      }
+
+      setStatus("", "sending…");
+      $("response").textContent = "";
+      const started = performance.now();
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        const ms = Math.round(performance.now() - started);
+        const text = await res.text();
+        setStatus(res.ok ? "ok" : "err", `HTTP ${res.status} · ${ms}ms`);
+        $("response").textContent =
+          `${res.status} ${res.statusText}\n` +
+          (text ? "\n" + text : "\n(empty body — 202 Accepted is expected on success)");
+      } catch (e) {
+        setStatus("err", "request failed");
+        $("response").textContent =
+          "Request failed: " + e.message +
+          "\n\nIs the app running on this host/port? Check that you opened this page from the app itself.";
+      }
+    }
+
+    function format() {
+      try {
+        $("payload").value = JSON.stringify(JSON.parse($("payload").value), null, 2);
+      } catch (e) {
+        setStatus("err", "invalid JSON");
+        $("response").textContent = "Cannot format — invalid JSON:\n" + e.message;
+      }
+    }
+
+    // Wire up events.
+    $("event").addEventListener("change", loadPresetIntoTextarea);
+    $("meetingId").addEventListener("change", syncFieldsIntoPayload);
+    $("sessionId").addEventListener("change", syncFieldsIntoPayload);
+    $("regenIds").addEventListener("click", regenIds);
+    $("loadPreset").addEventListener("click", loadPresetIntoTextarea);
+    $("send").addEventListener("click", send);
+    $("format").addEventListener("click", format);
+
+    // Initial state.
+    $("meetingId").value = uuid();
+    $("sessionId").value = uuid();
+    loadPresetIntoTextarea();
+  </script>
+</body>
+</html>
