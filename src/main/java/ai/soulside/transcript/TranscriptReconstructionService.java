@@ -4,8 +4,10 @@ import ai.soulside.meeting.UnknownSessionException;
 import ai.soulside.meeting.model.Session;
 import ai.soulside.meeting.repository.SessionRepository;
 import ai.soulside.storage.StorageService;
+import ai.soulside.common.Metrics;
 import ai.soulside.transcript.model.TranscriptSegment;
 import ai.soulside.transcript.repository.TranscriptSegmentRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -26,13 +28,16 @@ public class TranscriptReconstructionService {
     private final SessionRepository sessionRepository;
     private final TranscriptSegmentRepository segmentRepository;
     private final StorageService storageService;
+    private final MeterRegistry meterRegistry;
 
     public TranscriptReconstructionService(SessionRepository sessionRepository,
                                            TranscriptSegmentRepository segmentRepository,
-                                           StorageService storageService) {
+                                           StorageService storageService,
+                                           MeterRegistry meterRegistry) {
         this.sessionRepository = sessionRepository;
         this.segmentRepository = segmentRepository;
         this.storageService = storageService;
+        this.meterRegistry = meterRegistry;
     }
 
     @Transactional
@@ -53,6 +58,8 @@ public class TranscriptReconstructionService {
 
         session.setTranscriptUri(uri);
         sessionRepository.save(session);
+
+        meterRegistry.counter(Metrics.TRANSCRIPT_RECONSTRUCTION_COUNT).increment();
 
         log.info("Reconstructed transcript. sessionId={} segments={} uri={}",
                 sessionId, segments.size(), uri);

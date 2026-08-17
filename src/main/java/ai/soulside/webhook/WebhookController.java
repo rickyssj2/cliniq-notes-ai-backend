@@ -1,7 +1,9 @@
 package ai.soulside.webhook;
 
+import ai.soulside.common.Metrics;
 import ai.soulside.webhook.dto.WebhookEnvelope;
 import ai.soulside.webhook.security.HmacSignatureVerifier;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 import org.slf4j.Logger;
@@ -32,15 +34,18 @@ public class WebhookController {
     private final KafkaProducerService producerService;
     private final ObjectMapper objectMapper;
     private final Validator validator;
+    private final MeterRegistry meterRegistry;
 
     public WebhookController(HmacSignatureVerifier signatureVerifier,
                              KafkaProducerService producerService,
                              ObjectMapper objectMapper,
-                             Validator validator) {
+                             Validator validator,
+                             MeterRegistry meterRegistry) {
         this.signatureVerifier = signatureVerifier;
         this.producerService = producerService;
         this.objectMapper = objectMapper;
         this.validator = validator;
+        this.meterRegistry = meterRegistry;
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -60,6 +65,9 @@ public class WebhookController {
         String sessionId = envelope.meeting().sessionId().toString();
         String rawPayload = new String(rawBody, StandardCharsets.UTF_8);
         producerService.publish(sessionId, envelope.event(), rawPayload);
+
+        meterRegistry.counter(Metrics.WEBHOOK_EVENTS_RECEIVED,
+                Metrics.TAG_EVENT, envelope.event().getWireValue()).increment();
 
         log.info("Accepted webhook event={} meetingId={} sessionId={}",
                 envelope.event().getWireValue(), envelope.meeting().id(), sessionId);

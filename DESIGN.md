@@ -228,8 +228,23 @@ correctly. Partition keying by sessionId makes out-of-order delivery rare in pra
 - **Correlation IDs:** `CorrelationIdFilter` mints/propagates `X-Correlation-Id` into the MDC and
   echoes it on responses; the producer copies it into a Kafka header; the consumer restores it to
   the MDC. This threads one id across HTTP → Kafka → processing for traceable logs.
-- Actuator exposes health, info, metrics, and Prometheus; Grafana is provisioned via Docker Compose.
-- (Custom Micrometer metrics + dashboard are Phase 8.)
+- **Structured logging:** uses Spring Boot's native structured logging
+  (`logging.structured.format.console`, opt-in via `LOG_FORMAT=ecs`) rather than adding
+  logstash-logback-encoder — one fewer dependency, and MDC values are included automatically. The
+  consumer puts `sessionId` and `event` into the MDC (alongside `correlationId`) so each log line is
+  attributable to a session and event type. Local/dev keeps the readable plain-text pattern.
+- **Custom metrics (Micrometer → Prometheus):**
+  | Metric | Type | Tags | Meaning |
+  | ------ | ---- | ---- | ------- |
+  | `webhook.events.received` | counter | `event` | events accepted at the HTTP edge |
+  | `consumer.events.processed` | counter | `event`, `outcome` | consumed events, success/failure |
+  | `consumer.event.processing.time` | timer | `event` | per-event processing latency |
+  | `transcript.reconstruction.count` | counter | — | transcripts assembled |
+  | `kafka.consumer.dlq.count` | counter | `topic`, `cause` | records dead-lettered |
+- Metric names/tags are centralized in `common/Metrics` so instrumentation stays consistent.
+- Actuator exposes health, info, metrics, and Prometheus; Grafana is provisioned via Docker Compose
+  with a fixed-uid Prometheus datasource and a **Meeting Webhook Service** dashboard (event rates,
+  processing outcome, p95 latency, reconstruction total, DLQ rate).
 
 ---
 
@@ -257,7 +272,6 @@ correctly. Partition keying by sessionId makes out-of-order delivery rare in pra
 
 ## Deferred / Future Work
 
-- Custom metrics + Grafana dashboard (Phase 8).
 - Broader edge-case suite: out-of-order, late transcript after end, concurrent sessions (Phase 9).
 - README, architecture diagram, final polish (Phase 10).
 - Production hardening: external secret management, schema registry for typed events,

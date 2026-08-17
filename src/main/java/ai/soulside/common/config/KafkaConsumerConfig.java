@@ -1,5 +1,7 @@
 package ai.soulside.common.config;
 
+import ai.soulside.common.Metrics;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
@@ -36,7 +38,8 @@ public class KafkaConsumerConfig {
     private long maxAttempts;
 
     @Bean
-    public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<Object, Object> kafkaTemplate) {
+    public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<Object, Object> kafkaTemplate,
+                                                 MeterRegistry meterRegistry) {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
                 kafkaTemplate,
                 (record, exception) -> {
@@ -44,6 +47,9 @@ public class KafkaConsumerConfig {
                     log.error("Publishing to DLQ. topic={} partition={} offset={} cause={}: {}",
                             record.topic(), record.partition(), record.offset(),
                             rootCause.getClass().getSimpleName(), rootCause.getMessage());
+                    meterRegistry.counter(Metrics.CONSUMER_DLQ_COUNT,
+                            "topic", record.topic(),
+                            "cause", rootCause.getClass().getSimpleName()).increment();
                     return new TopicPartition(record.topic() + ".DLT", record.partition());
                 });
 

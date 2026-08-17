@@ -45,8 +45,15 @@ logging:
   level:
     ai.soulside: DEBUG
     org.apache.kafka: WARN
+  # Structured JSON logging is opt-in. Set LOG_FORMAT=ecs (or logstash) in containers so log
+  # aggregators can parse fields; MDC values (correlationId, sessionId, event) are included
+  # automatically. Left empty by default for readable local console output.
+  structured:
+    format:
+      console: ${LOG_FORMAT:}
   pattern:
-    console: "%d{ISO8601} [%thread] [%X{correlationId:-}] %-5level %logger{36} - %msg%n"
+    # Plain-text fallback used when structured logging is disabled. Includes the MDC context keys.
+    console: "%d{ISO8601} [%thread] [cid=%X{correlationId:-} sid=%X{sessionId:-} evt=%X{event:-}] %-5level %logger{36} - %msg%n"
 
 # App-specific config
 app:

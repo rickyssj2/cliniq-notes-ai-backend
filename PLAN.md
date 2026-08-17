@@ -168,19 +168,21 @@
 **Objective:** Correlation IDs, Prometheus metrics, Grafana dashboard.
 
 ### Implementation
-- [ ] `CorrelationIdFilter`: mint/propagate UUID into MDC + Kafka headers
-- [ ] Logback JSON encoder with `correlationId`, `sessionId`, `event`
-- [ ] Micrometer metrics: `webhook.events.received`, processing timer,
-      `transcript.reconstruction.count`, `kafka.consumer.retry.count`
-- [ ] Expose `/actuator/prometheus`
-- [ ] Prometheus scrape config
-- [ ] Provisioned Grafana dashboard JSON
+- [x] `CorrelationIdFilter`: mint/propagate UUID into MDC + Kafka headers (Phase 3)
+- [x] Structured JSON logging via Boot's native `logging.structured.format` (opt-in `LOG_FORMAT`);
+      `correlationId`, `sessionId`, `event` carried in MDC
+- [x] Micrometer metrics: `webhook.events.received`, `consumer.event.processing.time`,
+      `consumer.events.processed` (outcome-tagged), `transcript.reconstruction.count`,
+      `kafka.consumer.dlq.count`
+- [x] Expose `/actuator/prometheus` (Phase 1)
+- [x] Prometheus scrape config (Phase 1)
+- [x] Provisioned Grafana dashboard JSON
 
 ### Validation
-- [ ] Correlation ID consistent across controller → Kafka → consumer
-- [ ] `/actuator/prometheus` shows custom metrics
-- [ ] Prometheus target UP
-- [ ] Grafana dashboard shows live data after simulation
+- [x] Correlation ID consistent across controller → Kafka → consumer (test)
+- [x] `/actuator/prometheus` shows custom metrics (test)
+- [ ] Prometheus target UP (needs `docker compose up`)
+- [ ] Grafana dashboard shows live data after simulation (needs `docker compose up`)
 
 ---
 

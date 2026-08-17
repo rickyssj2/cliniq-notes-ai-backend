@@ -2,11 +2,15 @@ package ai.soulside.meeting;
 
 import ai.soulside.common.CorrelationId;
 import ai.soulside.common.KafkaTopics;
+import ai.soulside.common.LogFields;
+import ai.soulside.common.Metrics;
 import ai.soulside.meeting.event.MeetingEndedEvent;
 import ai.soulside.meeting.event.MeetingStartedEvent;
 import ai.soulside.transcript.TranscriptService;
 import ai.soulside.transcript.event.MeetingTranscriptEvent;
 import ai.soulside.webhook.dto.WebhookEventType;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -33,13 +37,16 @@ public class MeetingEventConsumer {
     private final MeetingService meetingService;
     private final TranscriptService transcriptService;
     private final ObjectMapper objectMapper;
+    private final MeterRegistry meterRegistry;
 
     public MeetingEventConsumer(MeetingService meetingService,
                                 TranscriptService transcriptService,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                MeterRegistry meterRegistry) {
         this.meetingService = meetingService;
         this.transcriptService = transcriptService;
         this.objectMapper = objectMapper;
+        this.meterRegistry = meterRegistry;
     }
 
     @KafkaListener(topics = KafkaTopics.MEETING_EVENTS, groupId = "${spring.kafka.consumer.group-id}")
@@ -51,6 +58,13 @@ public class MeetingEventConsumer {
         if (correlationId != null) {
             MDC.put(CorrelationId.MDC_KEY, correlationId);
         }
+        MDC.put(LogFields.SESSION_ID, key);
+        if (eventTypeHeader != null) {
+            MDC.put(LogFields.EVENT, eventTypeHeader);
+        }
+
+        Timer.Sample sample = Timer.start(meterRegistry);
+        String outcome = Metrics.OUTCOME_SUCCESS;
         try {
             WebhookEventType eventType = WebhookEventType.fromWireValue(eventTypeHeader);
             if (eventType == null) {
@@ -67,8 +81,18 @@ public class MeetingEventConsumer {
                 case MEETING_TRANSCRIPT -> transcriptService.handleTranscript(
                         objectMapper.readValue(rawPayload, MeetingTranscriptEvent.class));
             }
+        } catch (RuntimeException e) {
+            // Record the failure metric, then rethrow so the error handler retries/dead-letters.
+            outcome = Metrics.OUTCOME_FAILURE;
+            throw e;
         } finally {
+            String eventTag = eventTypeHeader != null ? eventTypeHeader : "unknown";
+            sample.stop(meterRegistry.timer(Metrics.CONSUMER_PROCESSING_TIME, Metrics.TAG_EVENT, eventTag));
+            meterRegistry.counter(Metrics.CONSUMER_EVENTS_PROCESSED,
+                    Metrics.TAG_EVENT, eventTag, Metrics.TAG_OUTCOME, outcome).increment();
             MDC.remove(CorrelationId.MDC_KEY);
+            MDC.remove(LogFields.SESSION_ID);
+            MDC.remove(LogFields.EVENT);
         }
     }
 }

@@ -11,7 +11,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -35,7 +34,6 @@ class TranscriptReconstructionServiceTest {
     @Mock
     private StorageService storageService;
 
-    @InjectMocks
     private TranscriptReconstructionService service;
 
     private UUID sessionId;
@@ -43,6 +41,10 @@ class TranscriptReconstructionServiceTest {
     @BeforeEach
     void setUp() {
         sessionId = UUID.randomUUID();
+        // Real registry so counter(...).increment() works without stubbing Micrometer internals.
+        service = new TranscriptReconstructionService(
+                sessionRepository, segmentRepository, storageService,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     private TranscriptSegment segment(int seq, String speaker, String content, int start, int end) {
