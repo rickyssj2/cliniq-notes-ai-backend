@@ -1,6 +1,9 @@
 # Design Notes — Event-Driven Meeting Webhook Service
+# Design Notes — Event-Driven Meeting Webhook Service
 
-This document captures the assumptions, trade-offs, decisions, and architecture choices made while building the service.
+The deep-dive companion to the [`README`](README.md). It covers the architectural decisions and
+their rationale. Tech stack, package layout, assumptions, and future work live in the README to
+avoid duplication.
 
 ---
 
@@ -14,18 +17,9 @@ a `<topic>.DLT` dead-letter topic.
 **Read path:** `GET /api/v1/meetings/{id}/sessions/{sessionId}/transcript` →
 `MeetingReadController` → `TranscriptQueryService` → ordered segments from PostgreSQL → JSON.
 
-### Layering / Package Structure
-
-| Package      | Responsibility                                             |
-| ------------ | ---------------------------------------------------------- |
-| `webhook`    | HTTP ingestion, DTOs, HMAC verification, Kafka producer    |
-| `meeting`    | Meeting/Session domain: entities, repos, service, consumer |
-| `transcript` | Transcript segment domain: entity, repo, service           |
-| `storage`    | Storage abstraction (Phase 6)                              |
-| `common`     | Cross-cutting: correlation IDs, config, error handling     |
-
 Business logic lives in services; controllers and consumers are thin adapters. Infrastructure
-concerns (Kafka, HMAC, correlation IDs) are isolated from domain logic.
+concerns (Kafka, HMAC, correlation IDs) are isolated from domain logic. The package layout is
+documented in the README.
 
 ---
 
@@ -94,33 +88,6 @@ outbound dependencies (`KafkaProducerService`, `ReconstructTaskProducer`) are co
 than core-owned interfaces. A strict hexagon would keep the domain framework-free and depend only on
 outbound port interfaces. We accepted that coupling to avoid a persistence-mapping layer for an
 exercise of this size; the boundaries are still clear enough to extract later.
-
----
-
-## Tech Baseline
-
-| Choice                | Decision                        | Rationale                                                       |
-| --------------------- | ------------------------------- | -------------------------------------------------------------- |
-| Framework             | Spring Boot 4.1.0               | Latest; requested. Java 17 baseline, Spring Framework 7.        |
-| Build                 | Maven (+ wrapper)               | Requested. Wrapper makes the build self-contained (no local mvn). |
-| Language boilerplate  | Lombok 1.18.46                  | Requested. Overridden from the BOM version for JDK 24 support. |
-| Database              | PostgreSQL 16 (H2 in tests)     | Relational fit for the meeting→session→segment hierarchy.      |
-| Messaging             | Kafka (KRaft, no Zookeeper)     | Event-driven core; partition-keyed ordering per session.       |
-| Migrations            | Flyway                          | Versioned, reviewable schema.                                  |
-| Observability         | Actuator + Micrometer/Prometheus + Grafana | Metrics and health out of the box.                  |
-
-### Spring Boot 4 / Jackson 3 migration notes (gotchas encountered)
-
-- `spring-boot-starter-web` → **`spring-boot-starter-webmvc`**.
-- Kafka starter is now first-party: **`spring-boot-starter-kafka`**.
-- Boot 4 ships **Jackson 3**: `ObjectMapper` is `tools.jackson.databind.ObjectMapper`
-  (annotations remain under `com.fasterxml.jackson.annotation`).
-- `@DataJpaTest` moved to `org.springframework.boot.data.jpa.test.autoconfigure`
-  (**`spring-boot-starter-data-jpa-test`**).
-- `@AutoConfigureMockMvc` / `@WebMvcTest` moved to `org.springframework.boot.webmvc.test.autoconfigure`
-  (**`spring-boot-starter-webmvc-test`**).
-- Spring Framework 7 removed `ExponentialBackOffWithMaxRetries`; `ExponentialBackOff` now has
-  `setMaxAttempts(long)` built in.
 
 ---
 
@@ -376,16 +343,6 @@ sessions — chosen per requirement (e.g. a UI that renders inline vs. a client 
 
 ---
 
-## Testing Strategy
-
-- **Unit tests** (Mockito) for service logic — fast, no Spring context.
-- **Integration tests** (`@SpringBootTest` + `@EmbeddedKafka` + H2) for the HTTP→Kafka→DB flow
-  and DLQ behavior; async assertions use Awaitility.
-- **Isolation caveat:** unlike `@DataJpaTest`, `@SpringBootTest` does **not** roll back between
-  methods. Integration tests clean the relevant tables in `@BeforeEach` and use unique UUIDs.
-
----
-
 ## Edge Case Behavior
 
 Explicit, tested decisions for scenarios beyond the happy path. Each row is covered by a test
@@ -408,32 +365,108 @@ Explicit, tested decisions for scenarios beyond the happy path. Each row is cove
 
 ---
 
-## Key Assumptions
+## Design Patterns
 
-1. `sessionId` is globally unique and is the correct partition/idempotency key.
-2. A `meeting.started` normally precedes its transcripts and end; retries cover the rare
-   out-of-order case, and a truly orphaned event dead-letters.
-3. The webhook forwards raw JSON to Kafka; downstream owns schema interpretation.
-4. Local dev may run without signature verification; production enables it.
-5. An embedded/local database and in-process Kafka are acceptable for the assignment; the design
-   documents how to scale out rather than deploying it.
+Patterns used, and where:
+
+- **Ports & Adapters (Hexagonal).** Transport/infra at the edges, domain in the core. See the
+  dedicated section above.
+- **Ports / Strategy — `StorageService`.** An interface (`store`/`retrieve`) with a swappable
+  implementation (`LocalFileStorageService` now, `S3StorageService` later). The core depends on the
+  port, not the backend.
+- **Adapter.** `WebhookController`, `MeetingEventConsumer`, `TranscriptReconstructConsumer`, and
+  `MeetingReadController` adapt HTTP/Kafka transport into core service calls.
+- **Publish/Subscribe (event-driven).** The webhook publishes to Kafka; consumers subscribe and act.
+  Producer and consumer are decoupled by the topic.
+- **Repository.** Spring Data repositories (`MeetingRepository`, `SessionRepository`,
+  `TranscriptSegmentRepository`) abstract persistence from the services.
+- **Builder.** Lombok `@Builder` on entities for readable, immutable-style construction.
+- **DTO.** Request/response records (`WebhookEnvelope`, `TranscriptResponse`, `TranscriptEntry`,
+  event records) keep JPA entities out of the transport layer.
+- **Idempotent Receiver.** Every handler dedups on a natural key (`transcriptId` / `sessionId`) so
+  at-least-once redelivery is safe.
+- **Dead Letter Channel.** `DeadLetterPublishingRecoverer` routes exhausted/poison messages to
+  `<topic>.DLT`.
+- **Correlation Identifier.** `CorrelationIdFilter` threads `X-Correlation-Id` across HTTP → Kafka →
+  consumer for end-to-end tracing.
+- **Externalized Configuration.** `@ConfigurationProperties` (`AppProperties`) binds `app.*` settings
+  with validation.
 
 ---
 
-## Deferred / Future Work
+## Evaluation Criteria — What We Did (and Didn't)
 
-- **Split into microservices** along the documented boundaries (ingestion / processing /
-  reconstruction / read) when independent scaling or team ownership justifies it.
-- **Object storage** for transcripts: `S3StorageService` with SSE encryption at rest and gzip
-  compression, behind the existing `StorageService` port.
-- **Completeness tracking:** enable sequence-gap detection at reconstruction, and/or adopt a
-  `totalSegments` field on `meeting.ended` if the upstream contract adds one.
-- **Self-healing reconstruction:** repair a missing/stale transcript on read (requeue if `ENDED` and
-  `transcriptUri` is null or the file count is stale), plus a sweeper — closes the lost-task and
-  incomplete-file gaps.
-- **Tiered read response:** presigned S3 URL for completed sessions, DB-sourced `entries[]` as the
-  fallback/streaming path, chosen per business requirement.
-- **Production hardening:** external secret management, a schema registry for typed events, consumer
-  concurrency tuning, and an outbox / Kafka transactions on the reconstruct hop if guaranteed
-  delivery of that task becomes a requirement.
-- **Read-side scaling:** read replicas and/or caching for the transcript GET endpoint.
+Mapped to the five dimensions in the assignment. Each notes what is implemented and what was
+consciously deferred.
+
+### Application Code Design
+
+- Idiomatic Spring Boot: constructor injection, `@Service`/`@RestController`/`@KafkaListener`, records
+  for DTOs, Lombok for entity boilerplate.
+- **Package-by-feature** (`webhook`, `meeting`, `transcript`, `storage`, `common`) rather than
+  package-by-layer, so the structure reflects the domain. Meaningful names throughout.
+- Small, single-responsibility services; thin controllers/consumers; Javadoc on public types.
+- **Not done:** no custom framework abstractions beyond what's needed; entities double as JPA models
+  (no separate domain/persistence mapping) — a deliberate simplification.
+
+### Separation of Concerns
+
+- Clear layers **within each feature slice**: adapter (controller/consumer) → service (business
+  logic) → repository/port (infrastructure). Business logic never lives in controllers.
+- Infrastructure concerns are isolated: HMAC verification, correlation IDs, Kafka wiring, and error
+  handling live in `webhook/security`, `common`, and `common/config` — out of the domain services.
+- Storage is behind a port so the domain has no filesystem/S3 knowledge.
+- **Read vs write** are separated (distinct entry points and models), a lean CQRS split.
+
+### Scalability & Performance
+
+- **Async by design.** The webhook returns `202 Accepted` immediately after publishing to Kafka; all
+  processing is off the request thread. The HTTP edge stays fast and thin.
+- **Horizontal scaling.** The ingestion edge is stateless and scales behind a load balancer. Consumers
+  scale out by adding instances in the same consumer group up to the partition count — Kafka
+  rebalances partitions across them.
+- **Ordering preserved under scale.** Keying by `sessionId` keeps each session on one partition, so
+  per-session order holds even with many consumer instances.
+- **Back-pressure.** Kafka is the buffer — a burst of webhooks is absorbed by the log and drained at
+  the consumers' pace, so a spike never overwhelms the DB. Consumer `max.poll.records` / concurrency
+  are the tuning levers.
+- **Connection pooling.** HikariCP (Spring Boot default) pools DB connections; sized via
+  `spring.datasource.hikari.*` (10 max / 2 idle locally).
+- **Future split to microservices.** The four boundaries (ingestion / processing / reconstruction /
+  read) are already decoupled over Kafka topics and ports, so each can become an independently scaled
+  service without a rewrite — reconstruction (IO-bound) and read (read-replica-friendly) scale on
+  different axes from ingestion.
+- **Read scaling.** Reads only touch the DB and can move to read replicas / caching independently.
+- **Not done (deferred, documented):** consumer concurrency tuning, read replicas/caching, pagination
+  on the read endpoint, and moving transcripts to S3. These are future-work items, not present today.
+
+### Event-Driven Architecture
+
+- **Why events, not just a publisher:** Kafka gives durable, replayable, partition-ordered delivery.
+  The webhook and the DB writers are decoupled — ingestion can accept traffic even if a downstream
+  consumer is slow or briefly down, and events can be replayed.
+- **Where EDA adds value here:** the started → transcript → ended lifecycle maps naturally to ordered
+  events; reconstruction is its own event (`transcript.reconstruct`) so it retries independently of
+  the write that triggered it.
+- **At-least-once + idempotent consumers** rather than chasing exactly-once — simpler and sufficient
+  given natural dedup keys.
+- **DLQ** for poison/exhausted messages so a bad event never blocks the partition.
+- **Broker-agnostic seams:** publish via `KafkaProducerService`, consume via `@KafkaListener`, so the
+  broker can be swapped by configuration.
+
+### Design Considerations
+
+- **Error handling:** exponential backoff, retryable-vs-non-retryable classification, fail-fast
+  validation in handlers, and DLQ with root-cause logging (see Error Handling & Retries).
+- **Idempotency:** natural-key dedup at the app layer plus a DB unique constraint as the atomic
+  backstop (see Idempotency & Ordering).
+- **Retry logic:** bounded `ExponentialBackOff`, configurable via `app.kafka.retry.*`.
+- **Logging & observability:** correlation IDs, opt-in structured JSON logging, custom Micrometer
+  metrics, Prometheus + Grafana (see Observability).
+- **Configuration management:** externalized `@ConfigurationProperties`, profile-based
+  (`local`/`test`), secrets via env vars, HMAC fail-closed in production.
+- **Testing strategy:** unit + integration (embedded Kafka + H2) covering the failure modes — detailed
+  in the README's Testing section.
+- **Security:** HMAC-SHA256 signature verification (fail-closed), constant-time comparison.
+- **Not done (deferred, documented):** transactional outbox, schema registry for typed events,
+  external secret manager, and the self-healing reconstruction / tiered read response noted above.

@@ -38,14 +38,16 @@ when a meeting ends, and exposes a read API to retrieve the ordered transcript f
 - **Ordering by partition key.** Keying every event by `sessionId` guarantees per-session ordering
   on a single partition — important for the started → transcript → ended lifecycle.
 - **Idempotent handlers.** Kafka is at-least-once, so every handler tolerates duplicates
-  (session `existsById`, transcript `transcriptId` dedup + unique constraint, ENDED no-op).
+  (session `existsById` in application layer with session_id as primary key, transcript `transcriptId` dedup + unique constraint, meeting.starter/meeting.ended duplicates cause no-op + primary key on id).
 - **Reconstruction as its own event.** Ending a session publishes a `transcript.reconstruct` task,
-  keeping the DB write fast and letting assembly retry independently.
-- **Pluggable storage.** `StorageService` abstracts where transcripts are written; the local
-  implementation uses files, and an object store could drop in without touching reconstruction.
+  keeping the DB write fast by putting segments directly and letting transcript assembly retry independently.
+- **Pluggable storage.** `StorageService` abstracts where transcripts are written; the current
+  implementation uses file system, and an object store could drop in easily in future.
+
+### Folder Structure
 
 **Layering (package-by-feature).** The top-level packages are business slices, not technical
-layers — each slice owns its controllers, services, entities, and repositories:
+layers — each slice owns its controllers, services, entities, and repositories, this allows devs to own features and work independently:
 
 ```
 ai.soulside
@@ -93,7 +95,7 @@ provided by the wrapper or the containers.
 docker compose up --build
 ```
 
-Wait for the app to report healthy, then:
+Wait for the app to report healthy, then either use scripts or the Demo UI (recommended):
 
 ```bash
 # Drive a full meeting lifecycle and print the verify command
@@ -103,13 +105,13 @@ Wait for the app to report healthy, then:
 curl -s http://localhost:8080/api/v1/meetings/50c8940e-1b97-402a-97d6-2708b7feca41/sessions/05e57591-d89e-45c9-ae44-08dc1eaad0e0/transcript | jq .
 ```
 
-Recommended: Open Demo UI at <http://localhost:8080/webhook-tester.html>.
+Recommended: Open Demo UI at <http://localhost:8080/webhook-tester.html>. It contains the scripts plus handy edge-cases and individual POST/GET request payloads.
 
 ### Service endpoints
 
 | Service     | URL                                   | Notes                          |
 | ----------- | ------------------------------------- | ------------------------------ |
-| Application | <http://localhost:8080>               | REST API + testing UI          |
+| Application | <http://localhost:8080>               | REST API + Demo UI (/webhook-tester.html)          |
 | Health      | <http://localhost:8080/actuator/health> |                              |
 | Prometheus metrics | <http://localhost:8080/actuator/prometheus> |                     |
 | Kafka UI    | <http://localhost:8090>               | topics, messages, DLQ          |
@@ -217,29 +219,36 @@ See [`DESIGN.md`](DESIGN.md) for the full boundary analysis and the per-decision
 
 ## Trade-offs & assumptions
 
-- **In-process Kafka topics, not a managed broker.** Sufficient for the assignment; the producer and
-  `@KafkaListener` seams mean swapping to managed Kafka is configuration, not a rewrite.
-- **No transactional outbox — natural-key idempotency instead.** Ingestion doesn't write to the DB
-  (no dual-write to make atomic), and consumers dedup on `transcriptId` / `sessionId`, so at-least-once
-  redelivery is a safe no-op. A lost `transcript.reconstruct` task (or a late transcript after
-  `meeting.ended`) can leave the file missing/stale; the planned fix is to **self-heal on read** —
-  if a session is `ENDED` but `transcriptUri` is null or stale, requeue reconstruction (idempotent) and
-  serve the DB-sourced transcript meanwhile. Readers are always correct since the DB is the source of
-  truth.
+- **Self-hosted Kafka rather than a managed broker.** We run Kafka as a container in the local
+  stack (this is what "in-process" refers to here — the broker runs alongside the app in Docker
+  Compose rather than as a managed cloud service). This was a deliberate choice to keep the project
+  self-contained, not a limitation. Because publishing goes through `KafkaProducerService` and
+  consumption through `@KafkaListener`, moving to a managed Kafka is a configuration change rather
+  than a rewrite.
+- **No transactional outbox — natural-key idempotency instead.** Ingestion never writes to the DB, so
+  there is no dual-write to make atomic, and consumers dedup on `transcriptId` and `sessionId`, which
+  makes at-least-once redelivery a safe no-op. A lost `transcript.reconstruct` task or a late
+  transcript after `meeting.ended` can still leave the file missing or stale. The planned fix is to
+  self-heal on read: when a session is `ENDED` but its `transcriptUri` is null or stale, requeue the
+  (idempotent) reconstruction and serve the DB-sourced transcript in the meantime. Readers stay
+  correct throughout because the DB is the source of truth.
 - **Reconstruct after `meeting.ended`, relying on at-least-once client delivery.** Assembling once the
-  session closes avoids rewriting the file per chunk and needing a total count up front. Completeness
-  can be checked via `sequenceNumber` gap detection at reconstruction; a `totalSegments` field on the
-  closing event would make it definitive if upstream added one.
+  session closes avoids rewriting the file per chunk and removes the need to know a total count up
+  front. Completeness can be checked with `sequenceNumber` gap detection at reconstruction, and a
+  `totalSegments` field on the closing event would make it definitive if upstream added one.
 - **Local file storage simulates an object store.** `LocalFileStorageService` sits behind the
-  `StorageService` port; an `S3StorageService` (with SSE encryption at rest and gzip compression) is a
-  drop-in swap with no change to reconstruction or the read API.
-- **Raw payload forwarded to Kafka.** The webhook doesn't fully type the body before publishing —
-  keeps ingestion fast and decouples HTTP from event schemas; the consumer owns deserialization.
-- **DB is the source of truth for reads.** The GET endpoint always orders segments from the DB; the
-  stored file is a convenience artifact referenced by URI, not reverse-parsed. It returns metadata +
-  URL + full `entries[]` inline today; at scale this would become tiered — a presigned S3 URL for
-  completed sessions, with DB-sourced `entries[]` as the fallback/streaming path.
+  `StorageService` port, so an `S3StorageService` with encryption at rest and gzip compression drops
+  in without any change to reconstruction or the read API.
+- **Raw payload forwarded to Kafka.** The webhook doesn't fully type the body before publishing. This
+  keeps ingestion fast and decouples HTTP from event schemas, leaving deserialization to the consumer.
+- **DB is the source of truth for reads.** The GET endpoint always orders segments from the DB, and
+  the stored file is a convenience artifact referenced by URI rather than reverse-parsed. It returns
+  metadata, URL, and the full `entries[]` inline today. At scale this would become tiered: a presigned
+  S3 URL for completed sessions, with DB-sourced `entries[]` as the fallback.
 - **`sessionId` is the unit of ordering and idempotency.** Assumed globally unique.
+- **Event ordering is assumed, not required.** A `meeting.started` normally precedes its transcripts
+  and its `meeting.ended`, but retries cover the rare out-of-order case and a truly orphaned event
+  is dead-lettered rather than silently dropped.
 
 ---
 
@@ -262,9 +271,9 @@ Profiles: **`local`** (Docker infra) · **`test`** (H2 + embedded Kafka).
 ## Observability
 
 - **Correlation IDs** — `X-Correlation-Id` is minted/propagated across HTTP → Kafka headers →
-  consumer MDC, so a single request is traceable end to end.
-- **Structured logging** — opt-in JSON via `LOG_FORMAT`; `correlationId`, `sessionId`, and `event`
-  are carried in the MDC.
+  consumer MDC (Mapped Diagnostic Context), so a single request is traceable end to end.
+- **Structured logging** — opt-in JSON via `LOG_FORMAT`, with `correlationId`, `sessionId`, and
+  `event` carried in the MDC.
 - **Custom metrics** — `webhook.events.received`, `consumer.events.processed` (outcome-tagged),
   `consumer.event.processing.time`, `transcript.reconstruction.count`, `kafka.consumer.dlq.count`,
   exposed at `/actuator/prometheus` and visualized by the provisioned Grafana dashboard.
@@ -363,5 +372,6 @@ One sequence diagram per scenario (see [`DESIGN.md`](DESIGN.md) for the rational
   transcript file is missing or stale — closes the lost-task / incomplete-file gaps.
 - Tiered read response: presigned S3 URL for completed sessions, `entries[]` as the fallback.
 - External secret management and a schema registry for typed events.
+- Consumer concurrency tuning as event volume grows.
 - Read replicas / caching for the transcript read endpoint; pagination for very large sessions.
 - An outbox or Kafka transactions on the reconstruct hop if guaranteed delivery of that task is needed.
