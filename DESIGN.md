@@ -1,15 +1,13 @@
 # Design Notes — Event-Driven Meeting Webhook Service
-# Design Notes — Event-Driven Meeting Webhook Service
 
 The deep-dive companion to the [`README`](README.md). It covers the architectural decisions and
-their rationale. Tech stack, package layout, assumptions, and future work live in the README to
-avoid duplication.
-
----
+their rationale.
 
 ## Architecture Overview
 
-![Architecture overview](docs/architecture-overview.png)
+<p align="center">
+  <img src="docs/architecture-overview.png" alt="Architecture overview" width="50%" />
+</p>
 
 Failures in either consumer are retried with backoff by a `DefaultErrorHandler`, then routed to
 a `<topic>.DLT` dead-letter topic.
@@ -21,7 +19,6 @@ Business logic lives in services; controllers and consumers are thin adapters. I
 concerns (Kafka, HMAC, correlation IDs) are isolated from domain logic. The package layout is
 documented in the README.
 
----
 
 ## Service Boundaries & Microservice Extraction
 
@@ -65,7 +62,6 @@ We keep it a monolith now because the assignment is a locally runnable exercise 
 deployable is easier to reason about; the boundaries are documented so the split is a deployment
 decision, not a rewrite.
 
----
 
 ## Ports & Adapters
 
@@ -89,7 +85,6 @@ than core-owned interfaces. A strict hexagon would keep the domain framework-fre
 outbound port interfaces. We accepted that coupling to avoid a persistence-mapping layer for an
 exercise of this size; the boundaries are still clear enough to extract later.
 
----
 
 ## Domain Model
 
@@ -113,7 +108,6 @@ Entities use `@Getter/@Setter/@Builder/@NoArgsConstructor/@AllArgsConstructor` b
 `@Data`/`@EqualsAndHashCode`. `equals`/`hashCode` over lazy JPA associations is a well-known
 footgun (can trigger lazy loading or infinite recursion), so it is deliberately avoided.
 
----
 
 ## Event-Driven Design
 
@@ -130,7 +124,6 @@ footgun (can trigger lazy loading or infinite recursion), so it is deliberately 
   consumption through `@KafkaListener`, moving to a managed Kafka / another broker is a config
   change, not a code rewrite.
 
----
 
 ## Idempotency & Ordering
 
@@ -166,7 +159,6 @@ relies on every message carrying a stable dedup key (which the payloads do: `tra
 `sessionId`). If we later needed guaranteed delivery of the reconstruct task specifically, an outbox
 (or Kafka transactions) on that single hop would be the upgrade path.
 
----
 
 ## Error Handling & Retries
 
@@ -188,7 +180,6 @@ relies on every message carrying a stable dedup key (which the payloads do: `tra
   message (e.g. `IllegalArgumentException: Transcript event missing data`) alongside the
   topic/partition/offset, so dead-lettered records are diagnosable from logs alone.
 
----
 
 ## Security
 
@@ -198,7 +189,6 @@ relies on every message carrying a stable dedup key (which the payloads do: `tra
   `local`/`test` profiles so the provided simulation script (which sends no signature) works.
 - The HMAC secret is externalized via config/env, never hard-coded.
 
----
 
 ## Transcript Storage & Reconstruction
 
@@ -281,7 +271,6 @@ is always safe. A periodic sweeper over `ENDED` sessions with a null `transcript
 that are never read. The DB stays the source of truth, so readers are always correct even before the
 file heals.
 
----
 
 ## Read API
 
@@ -316,7 +305,6 @@ business-driven tiered contract would be:
 So `entries[]` becomes the fallback/streaming path and the URL becomes the primary for completed
 sessions — chosen per requirement (e.g. a UI that renders inline vs. a client that just downloads).
 
----
 
 ## Observability
 
@@ -341,7 +329,6 @@ sessions — chosen per requirement (e.g. a UI that renders inline vs. a client 
   with a fixed-uid Prometheus datasource and a **Meeting Webhook Service** dashboard (event rates,
   processing outcome, p95 latency, reconstruction total, DLQ rate).
 
----
 
 ## Edge Case Behavior
 
@@ -363,7 +350,6 @@ Explicit, tested decisions for scenarios beyond the happy path. Each row is cove
 | **Missing/invalid HMAC signature** (when enabled) | 401, fail-closed | Security boundary is at ingestion. |
 | **Consumer failure (transient)** | Retried with exponential backoff, then DLQ | Bounded retries prevent poison-pill loops. |
 
----
 
 ## Design Patterns
 
@@ -392,12 +378,8 @@ Patterns used, and where:
 - **Externalized Configuration.** `@ConfigurationProperties` (`AppProperties`) binds `app.*` settings
   with validation.
 
----
 
-## Evaluation Criteria — What We Did (and Didn't)
-
-Mapped to the five dimensions in the assignment. Each notes what is implemented and what was
-consciously deferred.
+## What We Did (and Didn't)
 
 ### Application Code Design
 
