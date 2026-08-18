@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Ports &amp; Adapters</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #ffffff; }
+  #canvas {
+    position: relative;
+    width: 1240px;
+    height: 640px;
+    font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+    background:
+      linear-gradient(#f4f6fa 1px, transparent 1px) 0 0 / 100% 40px,
+      linear-gradient(90deg, #f4f6fa 1px, transparent 1px) 0 0 / 40px 100%,
+      #ffffff;
+  }
+  .title { position: absolute; left: 36px; top: 22px; }
+  .title h1 { font-size: 22px; color: #1f2733; }
+  .title p { font-size: 13px; color: #5b6472; margin-top: 4px; }
+
+  .colhdr {
+    position: absolute; font-size: 12px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: #5b6472;
+  }
+
+  .node {
+    position: absolute; border-radius: 10px; border: 2px solid;
+    padding: 9px 12px; box-shadow: 0 2px 6px rgba(31,39,51,.08);
+  }
+  .node .t { font-size: 14px; font-weight: 700; color: #1f2733; }
+  .node .s { font-size: 11px; color: #5b6472; margin-top: 2px; }
+
+  .driving { background: #e3f0ff; border-color: #2f6fed; }
+  .driven  { background: #fff2e0; border-color: #e08a1f; }
+  .backend { background: #eef1f5; border-color: #9aa6b8; }
+
+  /* Core hexagon */
+  .core {
+    position: absolute; left: 470px; top: 150px; width: 300px; height: 340px;
+    background: #e4f7ee; border: 2px solid #1f9d63;
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 0 44px;
+  }
+  .core .ct { font-size: 15px; font-weight: 800; color: #14663f; letter-spacing: .5px; }
+  .core .cs { font-size: 12px; color: #1f7a4d; margin-top: 8px; line-height: 1.5; }
+  .core .cn { font-size: 11px; color: #2b6e4d; margin-top: 10px; line-height: 1.45; }
+
+  svg.wires { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+  .plabel {
+    position: absolute; font-size: 10.5px; color: #5b6472; background: #fff;
+    padding: 1px 5px; border-radius: 4px; border: 1px solid #e4e8ef; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="canvas">
+  <div class="title">
+    <h1>Ports &amp; Adapters (Hexagonal)</h1>
+    <p>Dependencies point inward — the core defines the ports, adapters implement them</p>
+  </div>
+
+  <div class="colhdr" style="left:60px; top:110px;">Driving adapters →</div>
+  <div class="colhdr" style="left:560px; top:110px;">Core</div>
+  <div class="colhdr" style="left:1010px; top:110px;">← Driven adapters</div>
+
+  <svg class="wires">
+    <defs>
+      <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#7a8699" />
+      </marker>
+    </defs>
+    <!-- driving -> core (calls in through inbound ports) -->
+    <path d="M 300,170 L 500,240" stroke="#7a8699" stroke-width="2" fill="none" marker-end="url(#a)"/>
+    <path d="M 300,250 L 486,285" stroke="#7a8699" stroke-width="2" fill="none" marker-end="url(#a)"/>
+    <path d="M 300,330 L 486,350" stroke="#7a8699" stroke-width="2" fill="none" marker-end="url(#a)"/>
+    <path d="M 300,420 L 500,400" stroke="#7a8699" stroke-width="2" fill="none" marker-end="url(#a)"/>
+
+    <!-- core -> driven (calls out through outbound ports) -->
+    <path d="M 754,240 L 940,180" stroke="#7a8699" stroke-width="2" fill="none" marker-end="url(#a)"/>
+    <path d="M 770,290 L 940,290" stroke="#7a8699" stroke-width="2" fill="none" marker-end="url(#a)"/>
+    <path d="M 754,360 L 940,400" stroke="#7a8699" stroke-width="2" fill="none" marker-end="url(#a)"/>
+
+    <!-- storage port -> backend -->
+    <path d="M 1120,435 L 1120,485" stroke="#7a8699" stroke-width="2" fill="none" marker-end="url(#a)"/>
+  </svg>
+
+  <!-- port labels -->
+  <div class="plabel" style="left:360px; top:150px;">inbound port</div>
+  <div class="plabel" style="left:800px; top:150px;">outbound port</div>
+
+  <!-- Driving adapters -->
+  <div class="node driving" style="left:60px; top:150px; width:230px; height:44px;">
+    <div class="t">WebhookController</div>
+    <div class="s">HTTP POST /webhooks</div>
+  </div>
+  <div class="node driving" style="left:60px; top:230px; width:230px; height:44px;">
+    <div class="t">MeetingEventConsumer</div>
+    <div class="s">Kafka meeting.events</div>
+  </div>
+  <div class="node driving" style="left:60px; top:310px; width:230px; height:44px;">
+    <div class="t" style="font-size:13px;">TranscriptReconstructConsumer</div>
+    <div class="s">Kafka transcript.reconstruct</div>
+  </div>
+  <div class="node driving" style="left:60px; top:390px; width:230px; height:44px;">
+    <div class="t">MeetingReadController</div>
+    <div class="s">HTTP GET transcript</div>
+  </div>
+
+  <!-- Core hexagon -->
+  <div class="core">
+    <div class="ct">DOMAIN + APPLICATION</div>
+    <div class="cs">Meeting · Session · TranscriptSegment</div>
+    <div class="cn">MeetingService · TranscriptService<br/>ReconstructionService · QueryService</div>
+    <div class="cs" style="margin-top:10px;">no HTTP / Kafka / S3 knowledge*</div>
+  </div>
+
+  <!-- Driven adapters -->
+  <div class="node driven" style="left:940px; top:158px; width:250px; height:44px;">
+    <div class="t">Repositories → PostgreSQL</div>
+    <div class="s">Spring Data JPA</div>
+  </div>
+  <div class="node driven" style="left:940px; top:268px; width:250px; height:44px;">
+    <div class="t">Producers → Kafka</div>
+    <div class="s">KafkaProducerService · ReconstructTaskProducer</div>
+  </div>
+  <div class="node driven" style="left:940px; top:378px; width:250px; height:56px;">
+    <div class="t">StorageService (port)</div>
+    <div class="s">LocalFileStorageService today</div>
+  </div>
+
+  <!-- backend -->
+  <div class="node backend" style="left:965px; top:485px; width:200px; height:44px;">
+    <div class="t">S3 / Filesystem</div>
+    <div class="s">assembled transcript files</div>
+  </div>
+
+  <div class="plabel" style="left:36px; top:560px; border:none; color:#8b93a7;">
+    * pragmatic hexagon: domain entities are JPA-annotated and a couple of outbound deps are concrete classes rather than interfaces.
+  </div>
+</div>
+</body>
+</html>

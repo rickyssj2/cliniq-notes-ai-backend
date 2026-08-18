@@ -113,6 +113,30 @@ decision, not a rewrite.
 
 ---
 
+## Ports & Adapters
+
+The code follows a ports-and-adapters (hexagonal) shape: transport and infrastructure sit at the
+edges, the domain/application logic sits in the core, and dependencies point inward.
+
+![Ports and adapters](docs/ports-and-adapters.png)
+
+- **Driving adapters** (initiate work): `WebhookController`, `MeetingReadController` (HTTP) and
+  `MeetingEventConsumer`, `TranscriptReconstructConsumer` (Kafka). They translate transport into
+  core calls.
+- **Core**: the domain (`Meeting`, `Session`, `TranscriptSegment`) plus the application services
+  (`MeetingService`, `TranscriptService`, `TranscriptReconstructionService`, `TranscriptQueryService`).
+- **Driven adapters** (the core reaches out to): repositories → PostgreSQL, producers → Kafka, and
+  `StorageService` → filesystem/S3. `StorageService` is the cleanest port — a core interface whose
+  backend swaps (local file today, S3 presigned URLs later) with no change to reconstruction.
+
+**Honest caveat — pragmatic, not purist.** The domain entities are JPA-annotated and a couple of
+outbound dependencies (`KafkaProducerService`, `ReconstructTaskProducer`) are concrete classes rather
+than core-owned interfaces. A strict hexagon would keep the domain framework-free and depend only on
+outbound port interfaces. We accepted that coupling to avoid a persistence-mapping layer for an
+exercise of this size; the boundaries are still clear enough to extract later.
+
+---
+
 ## Tech Baseline
 
 | Choice                | Decision                        | Rationale                                                       |

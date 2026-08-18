@@ -30,17 +30,11 @@ when a meeting ends, and exposes a read API to retrieve the ordered transcript f
 
 ![High-level architecture](docs/architecture-simple.png)
 
-### Happy-path sequence
-
-The full lifecycle — `meeting.started` → N × `meeting.transcript` → `meeting.ended` →
-reconstruction → read:
-
-![Happy-path sequence diagram](docs/sequence-happy-path.png)
-
 ### Edge-case sequences
 
-One sequence diagram per non-happy-path scenario (see [`DESIGN.md`](DESIGN.md) for the rationale):
+One sequence diagram per scenario (see [`DESIGN.md`](DESIGN.md) for the rationale):
 
+- [Happy-path sequence diagram](docs/sequence-happy-path.png)
 - [Duplicate transcript chunk](docs/sequence-duplicate-transcript.png) — same `transcriptId` twice → stored once
 - [Out-of-order delivery](docs/sequence-out-of-order.png) — seq 3, 1, 2 → ordered on read
 - [Transcript after `meeting.ended`](docs/sequence-transcript-after-ended.png) — still stored, session stays ENDED
