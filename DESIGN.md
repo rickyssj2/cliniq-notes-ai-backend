@@ -297,6 +297,23 @@ that assumption, missing segments are transient and covered by the client's retr
 the safety net for the rare permanent loss. We did not add a speculative `totalSegments` column
 because no field in the current contract feeds it — adding an always-null column would be misleading.
 
+### Known gap: lost reconstruct task / incomplete file (self-healing)
+
+Two failure modes leave the stored file missing or stale, neither yet mitigated:
+
+1. **Lost task** — if the process dies between committing `ENDED` and publishing the
+   `transcript.reconstruct` task, the file is never written (the no-outbox trade-off).
+2. **Incomplete reconstruction** — a late transcript that arrives *after* `meeting.ended` is stored
+   in the DB but not folded into the already-written file.
+
+**Self-heal (planned):** make the read path repair on demand. When a session is `ENDED` but
+`transcriptUri` is null (lost task) or the file's segment count is stale versus the DB count
+(incomplete), (re)publish a `transcript.reconstruct` task and serve the DB-sourced transcript in the
+meantime. Reconstruction is already idempotent (re-reads segments, overwrites the file), so requeuing
+is always safe. A periodic sweeper over `ENDED` sessions with a null `transcriptUri` would catch cases
+that are never read. The DB stays the source of truth, so readers are always correct even before the
+file heals.
+
 ---
 
 ## Read API
@@ -316,6 +333,21 @@ because no field in the current contract feeds it — adding an always-null colu
   start/end offset seconds, language). Records/DTOs keep the domain entities out of the HTTP layer.
 - **Pagination** is deferred — sessions hold a bounded number of segments at current scale. If
   needed, the ordered query already supports it via a `Pageable` overload.
+
+### Splitting the response (URL vs full transcript)
+
+Today the endpoint returns metadata + `transcriptUri` + the full `entries[]` inline. That's simplest
+and always correct (entries come from the DB), but it doesn't scale for long meetings. A
+business-driven tiered contract would be:
+
+- **ENDED + file ready** → return metadata + a **presigned S3 URL** and let the client download the
+  blob directly, offloading bandwidth from the app (URL-first).
+- **ENDED + file missing/stale** → trigger the self-heal above and serve DB-sourced `entries[]` as the
+  fallback.
+- **LIVE (no file yet)** → serve DB-sourced `entries[]`, paginated.
+
+So `entries[]` becomes the fallback/streaming path and the URL becomes the primary for completed
+sessions — chosen per requirement (e.g. a UI that renders inline vs. a client that just downloads).
 
 ---
 
@@ -396,6 +428,11 @@ Explicit, tested decisions for scenarios beyond the happy path. Each row is cove
   compression, behind the existing `StorageService` port.
 - **Completeness tracking:** enable sequence-gap detection at reconstruction, and/or adopt a
   `totalSegments` field on `meeting.ended` if the upstream contract adds one.
+- **Self-healing reconstruction:** repair a missing/stale transcript on read (requeue if `ENDED` and
+  `transcriptUri` is null or the file count is stale), plus a sweeper — closes the lost-task and
+  incomplete-file gaps.
+- **Tiered read response:** presigned S3 URL for completed sessions, DB-sourced `entries[]` as the
+  fallback/streaming path, chosen per business requirement.
 - **Production hardening:** external secret management, a schema registry for typed events, consumer
   concurrency tuning, and an outbox / Kafka transactions on the reconstruct hop if guaranteed
   delivery of that task becomes a requirement.

@@ -221,8 +221,11 @@ See [`DESIGN.md`](DESIGN.md) for the full boundary analysis and the per-decision
   `@KafkaListener` seams mean swapping to managed Kafka is configuration, not a rewrite.
 - **No transactional outbox — natural-key idempotency instead.** Ingestion doesn't write to the DB
   (no dual-write to make atomic), and consumers dedup on `transcriptId` / `sessionId`, so at-least-once
-  redelivery is a safe no-op. The one residual risk (a lost `transcript.reconstruct` task) is
-  recoverable since reconstruction is idempotent and the transcript is always in the DB.
+  redelivery is a safe no-op. A lost `transcript.reconstruct` task (or a late transcript after
+  `meeting.ended`) can leave the file missing/stale; the planned fix is to **self-heal on read** —
+  if a session is `ENDED` but `transcriptUri` is null or stale, requeue reconstruction (idempotent) and
+  serve the DB-sourced transcript meanwhile. Readers are always correct since the DB is the source of
+  truth.
 - **Reconstruct after `meeting.ended`, relying on at-least-once client delivery.** Assembling once the
   session closes avoids rewriting the file per chunk and needing a total count up front. Completeness
   can be checked via `sequenceNumber` gap detection at reconstruction; a `totalSegments` field on the
@@ -233,7 +236,9 @@ See [`DESIGN.md`](DESIGN.md) for the full boundary analysis and the per-decision
 - **Raw payload forwarded to Kafka.** The webhook doesn't fully type the body before publishing —
   keeps ingestion fast and decouples HTTP from event schemas; the consumer owns deserialization.
 - **DB is the source of truth for reads.** The GET endpoint always orders segments from the DB; the
-  stored file is a convenience artifact referenced by URI, not reverse-parsed.
+  stored file is a convenience artifact referenced by URI, not reverse-parsed. It returns metadata +
+  URL + full `entries[]` inline today; at scale this would become tiered — a presigned S3 URL for
+  completed sessions, with DB-sourced `entries[]` as the fallback/streaming path.
 - **`sessionId` is the unit of ordering and idempotency.** Assumed globally unique.
 
 ---
@@ -273,8 +278,31 @@ Profiles: **`local`** (Docker infra) · **`test`** (H2 + embedded Kafka).
 ./mvnw clean verify   # full build + tests + bootable jar
 ```
 
-Integration tests run against an embedded Kafka broker and H2, so no external infrastructure is
-needed. Unit tests cover service logic in isolation with Mockito.
+Two levels, run with no external infrastructure — **unit tests** exercise service logic in isolation
+with Mockito; **integration tests** exercise the real HTTP → Kafka → DB flow against an embedded Kafka
+broker and H2, with async assertions via Awaitility.
+
+**Unit tests** — deterministic logic and its failure modes:
+
+- **Idempotency & dedup** — duplicate `meeting.started` creates one session; duplicate `transcriptId`
+  is skipped; a replayed `meeting.ended` on an already-ENDED session is a no-op.
+- **Fail-fast validation** — malformed/incomplete payloads (null `data`, missing `sessionId`, etc.)
+  raise a clear, non-retryable error rather than a deep NPE.
+- **Ordering & assembly** — reconstruction renders segments in `sequenceNumber` order; the read query
+  returns them ordered; unknown meeting/session → 404.
+- **Parsing & security** — offset parsing (plain seconds vs `HH:MM:SS`); HMAC signatures accepted,
+  rejected on tamper, rejected when missing (fail-closed).
+
+**Integration tests** — end-to-end behavior and infrastructure failure modes:
+
+- **Happy path** — full lifecycle → transcript reconstructed to storage and served by the GET API.
+- **Delivery hazards** — out-of-order transcripts still read in order; duplicate deliveries stored
+  once; a transcript arriving after `meeting.ended` is still persisted.
+- **Poison messages & retries** — `meeting.ended` for an unknown session is retried then routed to the
+  DLQ; a malformed payload dead-letters *fast* (non-retryable) instead of exhausting the retry budget.
+- **Concurrency** — concurrent sessions of the same meeting are tracked independently.
+- **Contracts** — webhook returns 202/400/401 as expected; persistence constraints and ordering hold;
+  custom metrics are exposed on `/actuator/prometheus`.
 
 ---
 
@@ -331,6 +359,9 @@ One sequence diagram per scenario (see [`DESIGN.md`](DESIGN.md) for the rational
   `StorageService` port.
 - Sequence-gap completeness detection at reconstruction; adopt a `totalSegments` field on
   `meeting.ended` if the upstream contract adds one.
+- Self-healing reconstruction: requeue on read (and via a sweeper) when a session is `ENDED` but the
+  transcript file is missing or stale — closes the lost-task / incomplete-file gaps.
+- Tiered read response: presigned S3 URL for completed sessions, `entries[]` as the fallback.
 - External secret management and a schema registry for typed events.
 - Read replicas / caching for the transcript read endpoint; pagination for very large sessions.
 - An outbox or Kafka transactions on the reconstruct hop if guaranteed delivery of that task is needed.
