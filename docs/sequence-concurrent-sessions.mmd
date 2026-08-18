@@ -1,0 +1,42 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant W as WebhookController
+    participant K as Kafka (meeting.events)
+    participant MC as MeetingEventConsumer
+    participant MS as MeetingService
+    participant TS as TranscriptService
+    participant DB as PostgreSQL
+
+    Note over C,DB: Edge case — two concurrent sessions of the SAME meeting, tracked independently
+
+    C->>W: POST meeting.started (meeting=M, session=A)
+    W->>K: publish (key = A)
+    K->>MC: deliver
+    MC->>MS: handleMeetingStarted
+    MS->>DB: upsert Meeting M, create Session A (LIVE)
+
+    C->>W: POST meeting.started (meeting=M, session=B)
+    W->>K: publish (key = B)
+    K->>MC: deliver
+    MC->>MS: handleMeetingStarted
+    MS->>DB: Meeting M exists, create Session B (LIVE)
+
+    C->>W: POST transcript (session=A)
+    W->>K: publish (key = A)
+    K->>MC: deliver
+    MC->>TS: handleTranscript
+    TS->>DB: insert segment under Session A
+
+    C->>W: POST transcript (session=B)
+    W->>K: publish (key = B)
+    K->>MC: deliver
+    MC->>TS: handleTranscript
+    TS->>DB: insert segment under Session B
+
+    C->>W: POST meeting.ended (session=A)
+    W->>K: publish (key = A)
+    K->>MC: deliver
+    MC->>MS: handleMeetingEnded
+    MS->>DB: Session A → ENDED (Session B stays LIVE)
+    Note right of MS: sessionId is the unit of isolation.<br>Segments and lifecycle are per-session under one Meeting.

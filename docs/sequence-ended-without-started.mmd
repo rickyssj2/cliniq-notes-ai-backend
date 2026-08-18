@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant W as WebhookController
+    participant K as Kafka (meeting.events)
+    participant MC as MeetingEventConsumer
+    participant MS as MeetingService
+    participant DB as PostgreSQL
+    participant EH as DefaultErrorHandler
+    participant DLQ as Kafka (meeting.events.DLT)
+
+    Note over C,DLQ: Edge case — meeting.ended for a session that was never started → retried, then DLQ
+
+    C->>W: POST meeting.ended (unknown sessionId)
+    W->>K: publish
+    W-->>C: 202 Accepted
+    K->>MC: deliver
+    MC->>MS: handleMeetingEnded
+    MS->>DB: findById(sessionId)
+    DB-->>MS: empty
+    MS-->>MC: throw UnknownSessionException (retryable)
+
+    loop retry with exponential backoff (bounded)
+        MC->>MS: reprocess
+        MS->>DB: findById(sessionId)
+        DB-->>MS: still empty
+        MS-->>MC: throw again
+    end
+
+    MC->>EH: retries exhausted
+    EH->>DLQ: publish record to meeting.events.DLT
+    Note right of EH: The started event may be briefly in flight, so retry covers it.<br>A truly orphaned end is dead-lettered, never silently dropped.

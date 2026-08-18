@@ -1,0 +1,48 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant W as WebhookController
+    participant K as Kafka (meeting.events)
+    participant MC as MeetingEventConsumer
+    participant MS as MeetingService
+    participant TS as TranscriptService
+    participant DB as PostgreSQL
+    participant RK as Kafka (transcript.reconstruct)
+    participant RC as TranscriptReconstructConsumer
+    participant ST as StorageService
+
+    Note over C,ST: Happy path — meeting.started → N transcripts → meeting.ended → reconstruction
+
+    C->>W: POST /api/v1/webhooks (meeting.started)
+    W->>W: verify HMAC + validate envelope
+    W->>K: publish raw event (key = sessionId)
+    W-->>C: 202 Accepted
+    K->>MC: deliver meeting.started
+    MC->>MS: handleMeetingStarted
+    MS->>DB: upsert Meeting, create Session (LIVE)
+
+    loop each transcript chunk (1..N)
+        C->>W: POST /api/v1/webhooks (meeting.transcript)
+        W->>K: publish raw event (key = sessionId)
+        W-->>C: 202 Accepted
+        K->>MC: deliver meeting.transcript
+        MC->>TS: handleTranscript
+        TS->>DB: dedup on transcriptId, insert segment
+    end
+
+    C->>W: POST /api/v1/webhooks (meeting.ended)
+    W->>K: publish raw event (key = sessionId)
+    W-->>C: 202 Accepted
+    K->>MC: deliver meeting.ended
+    MC->>MS: handleMeetingEnded
+    MS->>DB: set Session ENDED + endedAt
+    MS->>RK: publish reconstruct task (key = sessionId)
+    RK->>RC: deliver reconstruct task
+    RC->>DB: load segments ordered by sequenceNumber
+    RC->>ST: store assembled transcript
+    ST-->>RC: transcript URI
+    RC->>DB: persist transcriptUri on Session
+
+    C->>W: GET /meetings/{id}/sessions/{sessionId}/transcript
+    W->>DB: load ordered segments + metadata
+    W-->>C: 200 OK (ordered transcript JSON)

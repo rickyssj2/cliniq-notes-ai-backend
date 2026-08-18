@@ -1,0 +1,29 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant W as WebhookController
+    participant K as Kafka (meeting.events)
+    participant MC as MeetingEventConsumer
+    participant TS as TranscriptService
+    participant DB as PostgreSQL
+
+    Note over C,DB: Edge case — duplicate transcript chunk (same transcriptId) → stored once
+
+    C->>W: POST meeting.transcript (transcriptId = X)
+    W->>K: publish (key = sessionId)
+    W-->>C: 202 Accepted
+    K->>MC: deliver
+    MC->>TS: handleTranscript
+    TS->>DB: existsByTranscriptId(X)?
+    DB-->>TS: false
+    TS->>DB: insert segment (X)
+
+    Note over C,DB: same chunk delivered again (at-least-once redelivery)
+    C->>W: POST meeting.transcript (transcriptId = X)
+    W->>K: publish (key = sessionId)
+    W-->>C: 202 Accepted
+    K->>MC: deliver
+    MC->>TS: handleTranscript
+    TS->>DB: existsByTranscriptId(X)?
+    DB-->>TS: true
+    Note right of TS: skip (no-op). UNIQUE(transcript_id)<br/>is the race backstop

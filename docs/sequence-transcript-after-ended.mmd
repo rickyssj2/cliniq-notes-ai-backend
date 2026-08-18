@@ -1,0 +1,26 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant W as WebhookController
+    participant K as Kafka (meeting.events)
+    participant MC as MeetingEventConsumer
+    participant MS as MeetingService
+    participant TS as TranscriptService
+    participant DB as PostgreSQL
+
+    Note over C,DB: Edge case — transcript arrives AFTER meeting.ended → still stored, no data loss
+
+    C->>W: POST meeting.ended
+    W->>K: publish
+    K->>MC: deliver
+    MC->>MS: handleMeetingEnded
+    MS->>DB: set Session ENDED (+ publish reconstruct task)
+
+    Note over C,DB: a late transcript for the same session arrives afterwards
+    C->>W: POST meeting.transcript (late, seq=N+1)
+    W->>K: publish
+    W-->>C: 202 Accepted
+    K->>MC: deliver
+    MC->>TS: handleTranscript
+    TS->>DB: session exists → insert segment
+    Note right of TS: Session stays ENDED. Segment is persisted and<br/>visible via GET, but the already-written file is<br/>NOT auto-reassembled (re-reconstruction is a future hook)

@@ -6,7 +6,6 @@ asynchronously through Kafka, persists the results to PostgreSQL, reconstructs t
 when a meeting ends, and exposes a read API to retrieve the ordered transcript for a session.
 
 > Design rationale, trade-offs, and per-decision detail live in [`DESIGN.md`](DESIGN.md).
-> The phased build log lives in [`PLAN.md`](PLAN.md).
 
 ---
 
@@ -29,51 +28,24 @@ when a meeting ends, and exposes a read API to retrieve the ordered transcript f
 
 ## Architecture
 
-**High-level component view:**
-
 ![High-level architecture](docs/architecture-simple.png)
 
-**Detailed request/event flow:**
+### Happy-path sequence
 
-![Architecture diagram](docs/architecture.png)
+The full lifecycle — `meeting.started` → N × `meeting.transcript` → `meeting.ended` →
+reconstruction → read:
 
-> Sources: [`docs/architecture-simple.html`](docs/architecture-simple.html) and
-> [`docs/architecture.html`](docs/architecture.html) (each rendered to a matching `.png`).
+![Happy-path sequence diagram](docs/sequence-happy-path.png)
 
-<details>
-<summary>Text version</summary>
+### Edge-case sequences
 
-```
-   Webhook POST ─► WebhookController ──► Kafka: meeting.events ──► MeetingEventConsumer
-   (verify HMAC,    (202 Accepted)        (key = sessionId)         (route by eventType)
-    validate,                                                        │
-    publish raw)                                       ┌─────────────┼──────────────┐
-                                          meeting.started   meeting.transcript   meeting.ended
-                                                 │                │                    │
-                                                 ▼                ▼                    ▼
-                                          MeetingService   TranscriptService     MeetingService
-                                          (upsert meeting, (dedup + persist       (mark ENDED,
-                                           create session)  segment)               publish task)
-                                                 │                │                    │
-                                                 └────────┬───────┘                    │
-                                                          ▼                            ▼
-                                                     PostgreSQL          Kafka: transcript.reconstruct
-                                                                                       │
-                                                                                       ▼
-                                                                        TranscriptReconstructConsumer
-                                                                        (assemble ordered segments,
-                                                                         write file, store URI)
-                                                                                       │
-                                                                                       ▼
-                                                                              StorageService (file)
+One sequence diagram per non-happy-path scenario (see [`DESIGN.md`](DESIGN.md) for the rationale):
 
-   Read: GET /api/v1/meetings/{id}/sessions/{sessionId}/transcript
-         └► TranscriptQueryService ─► ordered segments from PostgreSQL ─► JSON
-
-   Failures in any consumer ─► DefaultErrorHandler (exponential backoff) ─► <topic>.DLT
-```
-
-</details>
+- [Duplicate transcript chunk](docs/sequence-duplicate-transcript.png) — same `transcriptId` twice → stored once
+- [Out-of-order delivery](docs/sequence-out-of-order.png) — seq 3, 1, 2 → ordered on read
+- [Transcript after `meeting.ended`](docs/sequence-transcript-after-ended.png) — still stored, session stays ENDED
+- [`meeting.ended` without `meeting.started`](docs/sequence-ended-without-started.png) — retried, then dead-lettered
+- [Concurrent sessions, same meeting](docs/sequence-concurrent-sessions.png) — tracked independently
 
 **Key ideas**
 
@@ -329,8 +301,6 @@ See [`DESIGN.md`](DESIGN.md) for the full boundary analysis and the per-decision
   keeps ingestion fast and decouples HTTP from event schemas; the consumer owns deserialization.
 - **DB is the source of truth for reads.** The GET endpoint always orders segments from the DB; the
   stored file is a convenience artifact referenced by URI, not reverse-parsed.
-- **Offsets stored as whole seconds.** The upstream format is inconsistent (plain seconds vs
-  `HH:MM:SS.mmm`); both are normalized to integer seconds.
 - **`sessionId` is the unit of ordering and idempotency.** Assumed globally unique.
 
 ---

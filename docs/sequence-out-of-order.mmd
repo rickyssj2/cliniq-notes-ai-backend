@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant W as WebhookController
+    participant K as Kafka (meeting.events)
+    participant MC as MeetingEventConsumer
+    participant TS as TranscriptService
+    participant DB as PostgreSQL
+    participant R as Reader (GET)
+
+    Note over C,DB: Edge case — out-of-order delivery (seq 3, 1, 2). Order is a read-time concern.
+
+    C->>W: POST transcript seq=3
+    W->>K: publish
+    K->>MC: deliver
+    MC->>TS: handleTranscript
+    TS->>DB: insert segment seq=3
+
+    C->>W: POST transcript seq=1
+    W->>K: publish
+    K->>MC: deliver
+    MC->>TS: handleTranscript
+    TS->>DB: insert segment seq=1
+
+    C->>W: POST transcript seq=2
+    W->>K: publish
+    K->>MC: deliver
+    MC->>TS: handleTranscript
+    TS->>DB: insert segment seq=2
+
+    Note over R,DB: Reconstruction / read always ORDER BY sequenceNumber
+    R->>DB: findBySessionIdOrderBySequenceNumberAsc
+    DB-->>R: segments [1, 2, 3]
