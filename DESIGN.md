@@ -69,6 +69,50 @@ concerns (Kafka, HMAC, correlation IDs) are isolated from domain logic.
 
 ---
 
+## Service Boundaries & Microservice Extraction
+
+The app is a modular monolith today (simplest thing that works for the assignment), but it is
+deliberately structured so it can be split into independently deployable services with minimal
+change. The seams already exist because components communicate through Kafka topics and repository
+interfaces, not in-process method calls across domains.
+
+**Read vs write are separated on purpose.** Ingestion/processing (the write path) and the transcript
+read API have very different access patterns and scaling needs:
+
+| Concern | Write path | Read path |
+| ------- | ---------- | --------- |
+| Entry point | `WebhookController` → Kafka → consumers | `MeetingReadController` → query service |
+| Load shape | Bursty, high-volume webhook fan-in | Spiky, read-heavy after meetings end |
+| Bottleneck | Consumer throughput, DB writes | DB reads / cache |
+| Scaling lever | More consumer instances / partitions | Read replicas, caching, CDN for files |
+| Failure mode | Retries + DLQ (must not lose events) | Degradation is tolerable (retry the GET) |
+
+Because the write side is fully asynchronous (202 + Kafka) and the read side only touches the DB,
+they can scale — and fail — independently. This is a lean CQRS split: the same store, but distinct
+entry points and models (`event`/`model` packages for writes, `dto` for reads).
+
+**Natural microservice boundaries**, each already a package with its own topics/tables:
+
+1. **Ingestion service** — `webhook` package. Stateless HTTP edge: verify HMAC, validate, publish to
+   `meeting.events`. Scales horizontally with traffic; owns no database.
+2. **Processing service** — `meeting` + `transcript` consumers. Consumes `meeting.events`, writes the
+   domain tables, emits `transcript.reconstruct`. Scales with consumer concurrency / partitions.
+3. **Reconstruction service** — `TranscriptReconstructConsumer` + `storage`. Consumes
+   `transcript.reconstruct`, assembles files. CPU/IO-bound; scales independently of ingestion.
+4. **Read/Query service** — `MeetingReadController` + `TranscriptQueryService`. Read-only; can run on
+   read replicas and be scaled/cached separately.
+
+**What makes extraction cheap here:** services already talk over Kafka (not shared method calls);
+each has a clear input (topic or HTTP) and output (topic, DB, or file); the `StorageService` and
+repository interfaces are ports that a split service keeps. The main work to extract would be
+splitting the schema ownership and adding a shared event schema (registry) — not restructuring code.
+
+We keep it a monolith now because the assignment is a locally runnable exercise and a single
+deployable is easier to reason about; the boundaries are documented so the split is a deployment
+decision, not a rewrite.
+
+---
+
 ## Tech Baseline
 
 | Choice                | Decision                        | Rationale                                                       |
@@ -148,6 +192,29 @@ footgun (can trigger lazy loading or infinite recursion), so it is deliberately 
 Ordering is by `sequenceNumber` at read time, so out-of-order delivery still reconstructs
 correctly. Partition keying by sessionId makes out-of-order delivery rare in practice.
 
+### No transactional outbox — natural-key idempotency instead
+
+We deliberately did **not** implement a transactional outbox. The outbox pattern exists to make the
+DB write and the event publish atomic (avoiding dual-write inconsistency). We don't need it here
+because the flow is inverted and idempotent by natural key:
+
+- On ingestion the webhook only publishes to Kafka; there is **no DB write on the produce side**, so
+  there is no dual-write to keep atomic.
+- On the consume side, processing is driven by the event and made safe by natural dedup keys:
+  `transcriptId` for transcript segments (unique constraint) and `sessionId` for sessions
+  (`existsById`). Re-processing the same Kafka record — the classic at-least-once redelivery — is a
+  no-op, so we don't need exactly-once/outbox machinery.
+- `meeting.ended` triggers a second publish (`transcript.reconstruct`) *after* its DB commit. If the
+  process dies between commit and publish, the reconstruct task is lost — but this is recoverable and
+  low-stakes: reconstruction is idempotent (it just re-reads segments) and can be re-triggered, and
+  the transcript is always still available from the DB via the read API. That residual risk is the
+  conscious trade-off for not adding an outbox.
+
+**Trade-off:** natural-key idempotency is simpler and has no extra table/relay to operate, but it
+relies on every message carrying a stable dedup key (which the payloads do: `transcriptId`,
+`sessionId`). If we later needed guaranteed delivery of the reconstruct task specifically, an outbox
+(or Kafka transactions) on that single hop would be the upgrade path.
+
 ---
 
 ## Error Handling & Retries
@@ -193,13 +260,58 @@ correctly. Partition keying by sessionId makes out-of-order delivery rare in pra
   writes `{basePath}/{sessionId}.txt`. Swapping in S3/GCS is a new implementation, no change to
   reconstruction logic. The URI (not the blob) is what's persisted on the session, so the read API
   can fetch on demand.
+
+### Storage evolution (local files → object store)
+
+`LocalFileStorageService` is a stand-in that simulates durable object storage on the local
+filesystem so the project runs with zero external dependencies. Because everything goes through the
+`StorageService` port (`store(sessionId, content) → uri`, `retrieve(sessionId)`), the local impl can
+be swapped for a cloud object store without touching reconstruction, the read API, or the domain:
+
+- **S3 (or GCS/Azure Blob).** An `S3StorageService` uploads to `s3://{bucket}/{sessionId}.txt` and
+  returns the object URI, which is stored on the session exactly as today. Selected by profile/config
+  (e.g. `app.storage.provider=s3`), so no code path changes.
+- **Encryption at rest.** Enable bucket-level SSE (SSE-S3 or SSE-KMS) so transcripts — which contain
+  meeting speech — are encrypted transparently. The service just sets the encryption header/option; no
+  application-level key handling.
+- **Compression.** Transcripts are highly compressible text; gzip before upload (store as
+  `{sessionId}.txt.gz`) to cut storage and transfer cost. Compression/decompression is internal to the
+  storage impl, invisible to callers.
+- **Why this is a clean seam:** the session persists only the URI, and the read API sources structured
+  entries from the DB — so object storage is purely for the assembled artifact. Latency, durability,
+  and cost characteristics change with the backend, but the contract does not.
 - **Reconstruction as its own event/consumer** (rather than inline in the `meeting.ended` handler)
   keeps the DB write for ending a session fast, isolates the file I/O, and lets reconstruction retry
   independently. Failures flow through the same `DefaultErrorHandler` to `transcript.reconstruct.DLT`.
 - **Empty transcript decision:** if a session ends with zero segments, an empty transcript file is
   still written (rather than failing/looping). This is a terminal, deterministic outcome; a meeting
-  legitimately may have had no speech. If "completeness" (e.g. no sequence gaps) becomes a
-  requirement, the validation hook lives in `TranscriptReconstructionService`.
+  legitimately may have had no speech.
+
+### Why reconstruct *after* `meeting.ended` (and completeness)
+
+Reconstruction is triggered by `meeting.ended`, not incrementally per transcript. Assembling only
+once the session is closed means we have the full set of segments in hand and don't rewrite the file
+on every chunk. It also sidesteps needing to know the total segment count *up front* — we simply read
+whatever is in the DB, ordered by `sequenceNumber`.
+
+**Completeness / how many segments there should be.** The webhook payloads carry a per-chunk
+`sequenceNumber` but **no total count**, so "did we get everything?" is not answerable from a single
+event. Two ways to make completeness checkable, in order of preference:
+
+1. **Sequence-gap detection at reconstruction time.** Since segments are ordered by `sequenceNumber`,
+   a gap (e.g. 1, 2, 4) or a missing head means a chunk never arrived. This check has a natural home
+   in `TranscriptReconstructionService` and needs no schema change — it can log a warning, tag a
+   metric, or mark the session `INCOMPLETE`. (Not enabled by default because a legitimate stream may
+   not start at 1.)
+2. **Explicit total on the closing event.** If upstream added a `totalSegments` (or
+   `expectedSequenceCount`) field to `meeting.ended`, we would persist it on the session and compare
+   against the stored count during reconstruction — a definitive completeness signal.
+
+We rely on **at-least-once delivery from the client**: the platform is assumed to retry until each
+webhook is accepted, so every segment eventually arrives (possibly duplicated, which we dedup). Under
+that assumption, missing segments are transient and covered by the client's retries; gap detection is
+the safety net for the rare permanent loss. We did not add a speculative `totalSegments` column
+because no field in the current contract feeds it — adding an always-null column would be misleading.
 
 ---
 
@@ -294,7 +406,13 @@ Explicit, tested decisions for scenarios beyond the happy path. Each row is cove
 
 ## Deferred / Future Work
 
-- Broader edge-case suite: out-of-order, late transcript after end, concurrent sessions (Phase 9).
-- README, architecture diagram, final polish (Phase 10).
-- Production hardening: external secret management, schema registry for typed events,
-  consumer concurrency tuning, transactional outbox if the DB write and publish must be atomic.
+- **Split into microservices** along the documented boundaries (ingestion / processing /
+  reconstruction / read) when independent scaling or team ownership justifies it.
+- **Object storage** for transcripts: `S3StorageService` with SSE encryption at rest and gzip
+  compression, behind the existing `StorageService` port.
+- **Completeness tracking:** enable sequence-gap detection at reconstruction, and/or adopt a
+  `totalSegments` field on `meeting.ended` if the upstream contract adds one.
+- **Production hardening:** external secret management, a schema registry for typed events, consumer
+  concurrency tuning, and an outbox / Kafka transactions on the reconstruct hop if guaranteed
+  delivery of that task becomes a requirement.
+- **Read-side scaling:** read replicas and/or caching for the transcript GET endpoint.

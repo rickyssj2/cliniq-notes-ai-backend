@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Meeting Webhook Service — Architecture</title>
+<style>
+  :root {
+    --ink: #1f2733;
+    --muted: #5b6472;
+    --edge: #7a8699;
+    --client: #e8eef7; --client-b: #4ف;
+    --ingest: #e3f0ff; --ingest-b: #2f6fed;
+    --kafka:  #efe6ff; --kafka-b:  #7a4fe0;
+    --proc:   #e4f7ee; --proc-b:   #1f9d63;
+    --data:   #fff2e0; --data-b:   #e08a1f;
+    --obs:    #fdeaf0; --obs-b:    #d6437e;
+    --topicfill: #f6f0ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #ffffff; }
+  #canvas {
+    position: relative;
+    width: 1480px;
+    height: 1000px;
+    font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+    background:
+      linear-gradient(#f4f6fa 1px, transparent 1px) 0 0 / 100% 40px,
+      linear-gradient(90deg, #f4f6fa 1px, transparent 1px) 0 0 / 40px 100%,
+      #ffffff;
+  }
+  .title { position: absolute; left: 40px; top: 26px; }
+  .title h1 { font-size: 26px; color: var(--ink); letter-spacing: .2px; }
+  .title p { font-size: 14px; color: var(--muted); margin-top: 4px; }
+
+  /* Swimlane band labels */
+  .lane {
+    position: absolute; width: 1400px; left: 40px; height: 1px;
+  }
+  .lane-label {
+    position: absolute; font-size: 12px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--muted); background: #fff; padding: 0 8px;
+  }
+
+  /* Nodes */
+  .node {
+    position: absolute; border-radius: 12px; border: 2px solid;
+    padding: 12px 14px; box-shadow: 0 2px 6px rgba(31,39,51,.08);
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .node .t { font-size: 15px; font-weight: 700; color: var(--ink); }
+  .node .s { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+
+  .ingest { background: var(--ingest); border-color: var(--ingest-b); }
+  .kafka  { background: var(--kafka);  border-color: var(--kafka-b); }
+  .proc   { background: var(--proc);   border-color: var(--proc-b); }
+  .data   { background: var(--data);   border-color: var(--data-b); }
+  .obs    { background: var(--obs);    border-color: var(--obs-b); }
+  .client { background: #eef1f5; border-color: #9aa6b8; }
+
+  /* Topic (cylinder-ish) nodes */
+  .topic {
+    position: absolute; border-radius: 20px; border: 2px dashed var(--kafka-b);
+    background: var(--topicfill); padding: 10px 14px; text-align: center;
+    box-shadow: 0 2px 6px rgba(31,39,51,.06);
+  }
+  .topic .t { font-size: 14px; font-weight: 700; color: #5a37b0; font-family: ui-monospace, Menlo, monospace; }
+  .topic .s { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .db {
+    position: absolute; border-radius: 14px 14px 14px 14px; border: 2px solid var(--data-b);
+    background: var(--data); padding: 14px; text-align: center;
+    box-shadow: 0 2px 6px rgba(31,39,51,.08);
+  }
+  .db .t { font-size: 15px; font-weight: 700; color: var(--ink); }
+  .db .s { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+
+  svg.wires { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+  .elabel {
+    position: absolute; font-size: 11px; color: var(--muted); background: #fff;
+    padding: 1px 5px; border-radius: 4px; border: 1px solid #e4e8ef;
+  }
+
+  /* Legend */
+  .legend {
+    position: absolute; right: 40px; top: 26px; border: 1px solid #e0e4ec; border-radius: 10px;
+    background: #fff; padding: 12px 14px; box-shadow: 0 2px 6px rgba(31,39,51,.06);
+  }
+  .legend h4 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .legend .item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink); margin: 5px 0; }
+  .swatch { width: 14px; height: 14px; border-radius: 4px; border: 2px solid; }
+</style>
+</head>
+<body>
+<div id="canvas">
+  <div class="title">
+    <h1>Meeting Webhook Service — Architecture</h1>
+    <p>Event-driven ingestion · Kafka processing · PostgreSQL + file storage · Spring Boot 4</p>
+  </div>
+
+  <div class="legend">
+    <h4>Layers</h4>
+    <div class="item"><span class="swatch" style="background:var(--ingest);border-color:var(--ingest-b)"></span> Ingestion (HTTP)</div>
+    <div class="item"><span class="swatch" style="background:var(--kafka);border-color:var(--kafka-b)"></span> Messaging (Kafka)</div>
+    <div class="item"><span class="swatch" style="background:var(--proc);border-color:var(--proc-b)"></span> Processing (services)</div>
+    <div class="item"><span class="swatch" style="background:var(--data);border-color:var(--data-b)"></span> Persistence &amp; storage</div>
+    <div class="item"><span class="swatch" style="background:var(--obs);border-color:var(--obs-b)"></span> Observability</div>
+  </div>
+
+  <!-- ── SVG connectors ─────────────────────────────────────────────────── -->
+  <svg class="wires">
+    <defs>
+      <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#7a8699" />
+      </marker>
+      <marker id="arrowRed" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#d6437e" />
+      </marker>
+    </defs>
+
+    <!-- client -> controller -->
+    <path d="M 210,190 L 300,190" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <!-- controller -> producer -->
+    <path d="M 470,205 L 470,250" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <!-- producer -> meeting.events topic -->
+    <path d="M 560,300 L 690,300" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <!-- meeting.events -> consumer -->
+    <path d="M 900,300 L 1010,300" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- consumer -> meeting service -->
+    <path d="M 1100,345 L 1100,430 L 780,430 L 780,470" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <!-- consumer -> transcript service -->
+    <path d="M 1130,345 L 1130,470" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- meeting service -> DB -->
+    <path d="M 780,560 L 780,690" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <!-- transcript service -> DB -->
+    <path d="M 1130,560 L 1130,660 L 900,660 L 900,690" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- meeting service (ended) -> reconstruct topic -->
+    <path d="M 690,515 L 470,515 L 470,560" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <!-- reconstruct topic -> reconstruct consumer -->
+    <path d="M 470,650 L 470,700" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <!-- reconstruct consumer -> storage -->
+    <path d="M 300,745 L 210,745" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <!-- reconstruct consumer -> DB (uri) -->
+    <path d="M 560,745 L 690,745 L 720,745" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- read path: client -> read controller -> DB -->
+    <path d="M 150,830 L 150,880 L 300,880" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <path d="M 560,895 L 820,895 L 820,830" stroke="#7a8699" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- DLQ (red) from consumer -->
+    <path d="M 1210,300 L 1300,300" stroke="#d6437e" stroke-width="2.5" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowRed)"/>
+  </svg>
+
+  <!-- edge labels -->
+  <div class="elabel" style="left:214px; top:150px; white-space:nowrap;">POST webhook</div>
+  <div class="elabel" style="left:576px; top:280px;">key = sessionId</div>
+  <div class="elabel" style="left:922px; top:280px;">by eventType</div>
+  <div class="elabel" style="left:486px; top:490px;">on meeting.ended</div>
+  <div class="elabel" style="left:214px; top:725px;">write file</div>
+  <div class="elabel" style="left:600px; top:725px;">store URI</div>
+  <div class="elabel" style="left:1224px; top:280px; color:#d6437e; border-color:#f3c6d8;">retries → DLQ</div>
+  <div class="elabel" style="left:150px; top:858px;">GET transcript</div>
+
+  <!-- ── Lane labels ─────────────────────────────────────────────────────── -->
+  <div class="lane-label" style="left:60px; top:120px;">Client</div>
+  <div class="lane-label" style="left:300px; top:120px;">Ingestion</div>
+  <div class="lane-label" style="left:700px; top:120px;">Messaging</div>
+  <div class="lane-label" style="left:1010px; top:120px;">Processing</div>
+  <div class="lane-label" style="left:1300px; top:390px;">Dead-letter</div>
+  <div class="lane-label" style="left:700px; top:640px;">Persistence</div>
+
+  <!-- ── Nodes ───────────────────────────────────────────────────────────── -->
+  <!-- Client -->
+  <div class="node client" style="left:40px; top:160px; width:170px; height:60px;">
+    <div class="t">Meeting Platform</div>
+    <div class="s">sends webhooks</div>
+  </div>
+
+  <!-- Ingestion -->
+  <div class="node ingest" style="left:300px; top:150px; width:200px; height:82px;">
+    <div class="t">WebhookController</div>
+    <div class="s">verify HMAC · validate<br/>envelope · 202 Accepted</div>
+  </div>
+  <div class="node ingest" style="left:360px; top:255px; width:200px; height:66px;">
+    <div class="t">KafkaProducerService</div>
+    <div class="s">publish raw JSON</div>
+  </div>
+
+  <!-- Messaging: meeting.events topic -->
+  <div class="topic" style="left:690px; top:270px; width:210px; height:60px;">
+    <div class="t">meeting.events</div>
+    <div class="s">3 partitions · keyed by sessionId</div>
+  </div>
+
+  <!-- Processing: consumer -->
+  <div class="node proc" style="left:1010px; top:258px; width:200px; height:86px;">
+    <div class="t">MeetingEventConsumer</div>
+    <div class="s">route by eventType header<br/>→ services</div>
+  </div>
+
+  <!-- Processing: services -->
+  <div class="node proc" style="left:690px; top:470px; width:180px; height:90px;">
+    <div class="t">MeetingService</div>
+    <div class="s">started: upsert + LIVE<br/>ended: ENDED + task</div>
+  </div>
+  <div class="node proc" style="left:1030px; top:470px; width:200px; height:90px;">
+    <div class="t">TranscriptService</div>
+    <div class="s">dedup on transcriptId<br/>persist segment</div>
+  </div>
+
+  <!-- Messaging: reconstruct topic -->
+  <div class="topic" style="left:360px; top:560px; width:220px; height:60px;">
+    <div class="t">transcript.reconstruct</div>
+    <div class="s">assembly task · keyed by sessionId</div>
+  </div>
+
+  <!-- Processing: reconstruct consumer -->
+  <div class="node proc" style="left:300px; top:700px; width:260px; height:90px;">
+    <div class="t">TranscriptReconstructConsumer</div>
+    <div class="s">assemble ordered segments<br/>→ StorageService</div>
+  </div>
+
+  <!-- Storage -->
+  <div class="node data" style="left:40px; top:715px; width:170px; height:66px;">
+    <div class="t">StorageService</div>
+    <div class="s">{sessionId}.txt</div>
+  </div>
+
+  <!-- Persistence: DB -->
+  <div class="db" style="left:720px; top:690px; width:220px; height:96px;">
+    <div class="t">PostgreSQL</div>
+    <div class="s">meetings · sessions<br/>transcript_segments<br/>(Flyway-managed)</div>
+  </div>
+
+  <!-- Read path -->
+  <div class="node client" style="left:60px; top:800px; width:180px; height:56px;">
+    <div class="t">API Consumer</div>
+    <div class="s">reads transcript</div>
+  </div>
+  <div class="node ingest" style="left:300px; top:852px; width:260px; height:82px;">
+    <div class="t">MeetingReadController</div>
+    <div class="s">GET .../sessions/{id}/transcript<br/>→ TranscriptQueryService</div>
+  </div>
+
+  <!-- DLQ -->
+  <div class="node obs" style="left:1300px; top:270px; width:140px; height:60px;">
+    <div class="t">&lt;topic&gt;.DLT</div>
+    <div class="s">exhausted retries</div>
+  </div>
+
+  <!-- Observability band -->
+  <div class="node obs" style="left:1010px; top:700px; width:430px; height:96px;">
+    <div class="t">Observability</div>
+    <div class="s">Correlation IDs (HTTP → Kafka → MDC) · Micrometer metrics<br/>
+      /actuator/prometheus → Prometheus → Grafana dashboard</div>
+  </div>
+</div>
+</body>
+</html>

@@ -29,6 +29,20 @@ when a meeting ends, and exposes a read API to retrieve the ordered transcript f
 
 ## Architecture
 
+**High-level component view:**
+
+![High-level architecture](docs/architecture-simple.png)
+
+**Detailed request/event flow:**
+
+![Architecture diagram](docs/architecture.png)
+
+> Sources: [`docs/architecture-simple.html`](docs/architecture-simple.html) and
+> [`docs/architecture.html`](docs/architecture.html) (each rendered to a matching `.png`).
+
+<details>
+<summary>Text version</summary>
+
 ```
    Webhook POST ─► WebhookController ──► Kafka: meeting.events ──► MeetingEventConsumer
    (verify HMAC,    (202 Accepted)        (key = sessionId)         (route by eventType)
@@ -58,6 +72,8 @@ when a meeting ends, and exposes a read API to retrieve the ordered transcript f
 
    Failures in any consumer ─► DefaultErrorHandler (exponential backoff) ─► <topic>.DLT
 ```
+
+</details>
 
 **Key ideas**
 
@@ -276,10 +292,39 @@ Summarized here; full rationale and the mapping to tests is in [`DESIGN.md`](DES
 
 ---
 
+## Scalability & service boundaries
+
+The service is a modular monolith with boundaries drawn so it can be split into independently
+deployable services without a rewrite — components already communicate over Kafka topics and
+repository/port interfaces, not cross-domain method calls.
+
+- **Read and write paths are separated.** The write path (webhook → Kafka → consumers) is fully
+  asynchronous and scales with consumer concurrency / partitions; the read path
+  (`GET .../transcript`) only touches the DB and scales with read replicas / caching. They fail and
+  scale independently — a lean CQRS split over one store.
+- **Natural extraction points:** ingestion (HTTP edge, stateless) · processing (event consumers) ·
+  reconstruction (assembly + storage) · read/query. Each is a package today with its own
+  topic/table ownership.
+- **Broker swap is config, not code:** publishing goes through `KafkaProducerService` and consumption
+  through `@KafkaListener`, so moving to managed Kafka is a configuration change.
+
+See [`DESIGN.md`](DESIGN.md) for the full boundary analysis and the per-decision rationale.
+
 ## Trade-offs & assumptions
 
 - **In-process Kafka topics, not a managed broker.** Sufficient for the assignment; the producer and
   `@KafkaListener` seams mean swapping to managed Kafka is configuration, not a rewrite.
+- **No transactional outbox — natural-key idempotency instead.** Ingestion doesn't write to the DB
+  (no dual-write to make atomic), and consumers dedup on `transcriptId` / `sessionId`, so at-least-once
+  redelivery is a safe no-op. The one residual risk (a lost `transcript.reconstruct` task) is
+  recoverable since reconstruction is idempotent and the transcript is always in the DB.
+- **Reconstruct after `meeting.ended`, relying on at-least-once client delivery.** Assembling once the
+  session closes avoids rewriting the file per chunk and needing a total count up front. Completeness
+  can be checked via `sequenceNumber` gap detection at reconstruction; a `totalSegments` field on the
+  closing event would make it definitive if upstream added one.
+- **Local file storage simulates an object store.** `LocalFileStorageService` sits behind the
+  `StorageService` port; an `S3StorageService` (with SSE encryption at rest and gzip compression) is a
+  drop-in swap with no change to reconstruction or the read API.
 - **Raw payload forwarded to Kafka.** The webhook doesn't fully type the body before publishing —
   keeps ingestion fast and decouples HTTP from event schemas; the consumer owns deserialization.
 - **DB is the source of truth for reads.** The GET endpoint always orders segments from the DB; the
@@ -292,7 +337,12 @@ Summarized here; full rationale and the mapping to tests is in [`DESIGN.md`](DES
 
 ## Future work
 
+- Split into microservices along the documented boundaries (ingestion / processing / reconstruction /
+  read) when independent scaling or team ownership justifies it.
+- `S3StorageService` with SSE encryption at rest and gzip compression, behind the existing
+  `StorageService` port.
+- Sequence-gap completeness detection at reconstruction; adopt a `totalSegments` field on
+  `meeting.ended` if the upstream contract adds one.
 - External secret management and a schema registry for typed events.
-- A re-reconstruction trigger for transcripts that arrive after a session ends.
-- Consumer concurrency tuning and a transactional outbox if DB write + publish must be atomic.
-- Pagination on the transcript read endpoint for very large sessions.
+- Read replicas / caching for the transcript read endpoint; pagination for very large sessions.
+- An outbox or Kafka transactions on the reconstruct hop if guaranteed delivery of that task is needed.
