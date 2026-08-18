@@ -1,52 +1,12 @@
 # Design Notes — Event-Driven Meeting Webhook Service
 
-This document captures the assumptions, trade-offs, decisions, and architecture choices made
-while building the service. It is updated at the end of each phase.
+This document captures the assumptions, trade-offs, decisions, and architecture choices made while building the service.
 
 ---
 
 ## Architecture Overview
 
-```
-                      ┌─────────────────┐
-   Webhook POST  ───► │ WebhookController│  (verify HMAC, validate envelope, 202)
-                      └────────┬────────┘
-                               │ publish raw JSON, key = sessionId
-                               ▼
-                      ┌─────────────────┐
-                      │  meeting.events │  (Kafka topic, 3 partitions)
-                      └────────┬────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ MeetingEventConsumer  │ route by eventType header
-                    └───┬───────────┬───────┘
-        meeting.started │           │ meeting.transcript
-        meeting.ended   │           │
-                        ▼           ▼
-                 ┌────────────┐  ┌──────────────────┐
-                 │MeetingSvc  │  │ TranscriptService │
-                 └─────┬──────┘  └────────┬─────────┘
-                       │                  │
-                       ▼                  ▼
-                 ┌──────────────────────────────┐
-                 │        PostgreSQL             │
-                 │ meetings / sessions / segments│
-                 └──────────────────────────────┘
-                       │ (on meeting.ended)
-                       ▼
-              ┌─────────────────────┐
-              │transcript.reconstruct│  (Kafka topic)
-              └──────────┬──────────┘
-                         ▼
-              ┌───────────────────────────┐
-              │TranscriptReconstructConsumer│ assemble ordered segments
-              └──────────┬────────────────┘
-                         ▼
-                 ┌───────────────┐
-                 │ StorageService │ → {basePath}/{sessionId}.txt, URI on session
-                 └───────────────┘
-```
+![Architecture overview](docs/architecture-overview.png)
 
 Failures in either consumer are retried with backoff by a `DefaultErrorHandler`, then routed to
 a `<topic>.DLT` dead-letter topic.
@@ -166,7 +126,7 @@ exercise of this size; the boundaries are still clear enough to extract later.
 
 ## Domain Model
 
-- **Meeting** (1) → (*) **Session** (1) → (*) **TranscriptSegment**.
+- **Meeting** (1) → (\*) **Session** (1) → (*) **TranscriptSegment**.
 - `Session.status` ∈ {`LIVE`, `ENDED`} (enum stored as string, plus a DB CHECK constraint).
 - `TranscriptSegment` carries `transcriptId` (natural dedup key, `UNIQUE`), `sequenceNumber`
   (ordering), speaker id/name, content, offsets (integer seconds), language.

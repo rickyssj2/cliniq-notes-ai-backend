@@ -12,16 +12,16 @@ when a meeting ends, and exposes a read API to retrieve the ordered transcript f
 ## Contents
 
 - [Architecture](#architecture)
-- [Tech stack](#tech-stack)
 - [Quick start](#quick-start)
 - [API reference](#api-reference)
-- [Testing UI](#testing-ui)
-- [Simulation scripts](#simulation-scripts)
+- [Demo UI & Simulation](#demo-ui--simulation)
+- [Scalability & service boundaries](#scalability--service-boundaries)
+- [Trade-offs & assumptions](#trade-offs--assumptions)
 - [Configuration](#configuration)
 - [Observability](#observability)
 - [Testing](#testing)
 - [Edge-case behavior](#edge-case-behavior)
-- [Trade-offs & assumptions](#trade-offs--assumptions)
+- [Tech stack](#tech-stack)
 - [Future work](#future-work)
 
 ---
@@ -29,17 +29,6 @@ when a meeting ends, and exposes a read API to retrieve the ordered transcript f
 ## Architecture
 
 ![High-level architecture](docs/architecture-simple.png)
-
-### Edge-case sequences
-
-One sequence diagram per scenario (see [`DESIGN.md`](DESIGN.md) for the rationale):
-
-- [Happy-path sequence diagram](docs/sequence-happy-path.png)
-- [Duplicate transcript chunk](docs/sequence-duplicate-transcript.png) — same `transcriptId` twice → stored once
-- [Out-of-order delivery](docs/sequence-out-of-order.png) — seq 3, 1, 2 → ordered on read
-- [Transcript after `meeting.ended`](docs/sequence-transcript-after-ended.png) — still stored, session stays ENDED
-- [`meeting.ended` without `meeting.started`](docs/sequence-ended-without-started.png) — retried, then dead-lettered
-- [Concurrent sessions, same meeting](docs/sequence-concurrent-sessions.png) — tracked independently
 
 **Key ideas**
 
@@ -55,24 +44,42 @@ One sequence diagram per scenario (see [`DESIGN.md`](DESIGN.md) for the rational
 - **Pluggable storage.** `StorageService` abstracts where transcripts are written; the local
   implementation uses files, and an object store could drop in without touching reconstruction.
 
-Layering: `webhook` (ingestion) · `meeting` (meeting/session domain) · `transcript` (segments,
-reconstruction, read API) · `storage` (persistence abstraction) · `common` (cross-cutting).
+**Layering (package-by-feature).** The top-level packages are business slices, not technical
+layers — each slice owns its controllers, services, entities, and repositories:
 
----
+```
+ai.soulside
+├── webhook/            Ingestion: HTTP edge, DTOs, HMAC, Kafka producer
+│   ├── dto/            WebhookEnvelope, WebhookEventType
+│   └── security/       HmacSignatureVerifier
+├── meeting/            Meeting/Session domain
+│   ├── event/          MeetingStartedEvent, MeetingEndedEvent
+│   ├── model/          Meeting, Session, SessionStatus
+│   └── repository/     MeetingRepository, SessionRepository
+├── transcript/         Transcript domain: ingest, reconstruction, read API
+│   ├── dto/            TranscriptResponse, TranscriptEntry
+│   ├── event/          MeetingTranscriptEvent
+│   ├── model/          TranscriptSegment
+│   └── repository/     TranscriptSegmentRepository
+├── storage/            Persistence port + adapter (StorageService, LocalFileStorageService)
+└── common/             Cross-cutting (shared kernel)
+    ├── config/         Kafka, AppProperties
+    └── web/            GlobalExceptionHandler, ApiError
+```
 
-## Tech stack
+- **`webhook`** — the ingestion edge: verifies HMAC, validates the envelope, and publishes to Kafka.
+  It owns no database.
+- **`meeting`** — the Meeting/Session lifecycle: handles `meeting.started`/`meeting.ended`, owns the
+  meeting and session tables.
+- **`transcript`** — everything about transcript segments: ingest + dedup, reconstruction into a
+  file, and the read/query API.
+- **`storage`** — a driven port (`StorageService`) with a filesystem adapter today, swappable for S3.
+- **`common`** — cross-cutting concerns shared across slices (correlation IDs, config, error handling,
+  metrics) — the equivalent of a shared kernel, with no business logic.
 
-| Concern      | Choice                                               |
-| ------------ | ---------------------------------------------------- |
-| Language     | Java 17                                              |
-| Framework    | Spring Boot 4.1.0 (Spring Framework 7)               |
-| Build        | Maven (via the included wrapper `./mvnw`)            |
-| Messaging    | Apache Kafka (KRaft mode — no Zookeeper)             |
-| Database     | PostgreSQL 16 (H2 in tests)                          |
-| Migrations   | Flyway                                               |
-| Boilerplate  | Lombok 1.18.46                                        |
-| Observability| Actuator + Micrometer/Prometheus + Grafana           |
-| Tests        | JUnit 5, Mockito, Spring Kafka Test (embedded), Awaitility |
+Within each slice we keep hexagonal layering: controllers/consumers are thin adapters, services hold
+the business logic, and repositories/storage are driven ports. So it's package-by-feature at the top,
+ports-and-adapters inside each slice.
 
 ---
 
@@ -96,7 +103,7 @@ Wait for the app to report healthy, then:
 curl -s http://localhost:8080/api/v1/meetings/50c8940e-1b97-402a-97d6-2708b7feca41/sessions/05e57591-d89e-45c9-ae44-08dc1eaad0e0/transcript | jq .
 ```
 
-Or open the browser testing UI at <http://localhost:8080/webhook-tester.html>.
+Recommended: Open Demo UI at <http://localhost:8080/webhook-tester.html>.
 
 ### Service endpoints
 
@@ -108,15 +115,6 @@ Or open the browser testing UI at <http://localhost:8080/webhook-tester.html>.
 | Kafka UI    | <http://localhost:8090>               | topics, messages, DLQ          |
 | Prometheus  | <http://localhost:9090>               | targets, queries               |
 | Grafana     | <http://localhost:3000>               | "Meeting Webhook Service" dashboard (anonymous view enabled) |
-
-### Running the app on the host (without the app container)
-
-Start only the infrastructure, then run the app with the wrapper:
-
-```bash
-docker compose up postgres kafka kafka-ui
-./mvnw spring-boot:run -Dspring-boot.run.profiles=local
-```
 
 The `local` profile points at `localhost:5432` (Postgres) and `localhost:29092` (Kafka's external
 listener) and disables HMAC verification for convenience.
@@ -174,7 +172,7 @@ is unknown. Works for both LIVE (still accumulating) and ENDED (reconstructed) s
 
 ---
 
-## Testing UI
+## Demo UI & Simulation
 
 A single-page tester is served at **`/webhook-tester.html`**. It provides:
 
@@ -184,9 +182,8 @@ A single-page tester is served at **`/webhook-tester.html`**. It provides:
   out-of-order, transcript-after-ended, ended-without-started, concurrent sessions, malformed payload).
 - **Manual single-event tester** — send any hand-edited payload to the webhook.
 
----
 
-## Simulation scripts
+### Simulation scripts (Optional)
 
 | Script                              | Purpose                                                        |
 | ----------------------------------- | -------------------------------------------------------------- |
@@ -197,6 +194,47 @@ A single-page tester is served at **`/webhook-tester.html`**. It provides:
 ./scripts/simulate_meeting.sh          # defaults to http://localhost:8080
 ./scripts/simulate_edge_cases.sh       # optional first arg overrides the base URL
 ```
+
+---
+
+## Scalability & service boundaries
+
+The service is a modular monolith with boundaries drawn so it can be split into independently
+deployable services without a rewrite — components already communicate over Kafka topics and
+repository/port interfaces, not cross-domain method calls.
+
+- **Read and write paths are separated.** The write path (webhook → Kafka → consumers) is fully
+  asynchronous and scales with consumer concurrency / partitions; the read path
+  (`GET .../transcript`) only touches the DB and scales with read replicas / caching. They fail and
+  scale independently — a lean CQRS split over one store.
+- **Natural extraction points:** ingestion (HTTP edge, stateless) · processing (event consumers) ·
+  reconstruction (assembly + storage) · read/query. Each is a package today with its own
+  topic/table ownership.
+- **Broker swap is config, not code:** publishing goes through `KafkaProducerService` and consumption
+  through `@KafkaListener`, so moving to managed Kafka is a configuration change.
+
+See [`DESIGN.md`](DESIGN.md) for the full boundary analysis and the per-decision rationale.
+
+## Trade-offs & assumptions
+
+- **In-process Kafka topics, not a managed broker.** Sufficient for the assignment; the producer and
+  `@KafkaListener` seams mean swapping to managed Kafka is configuration, not a rewrite.
+- **No transactional outbox — natural-key idempotency instead.** Ingestion doesn't write to the DB
+  (no dual-write to make atomic), and consumers dedup on `transcriptId` / `sessionId`, so at-least-once
+  redelivery is a safe no-op. The one residual risk (a lost `transcript.reconstruct` task) is
+  recoverable since reconstruction is idempotent and the transcript is always in the DB.
+- **Reconstruct after `meeting.ended`, relying on at-least-once client delivery.** Assembling once the
+  session closes avoids rewriting the file per chunk and needing a total count up front. Completeness
+  can be checked via `sequenceNumber` gap detection at reconstruction; a `totalSegments` field on the
+  closing event would make it definitive if upstream added one.
+- **Local file storage simulates an object store.** `LocalFileStorageService` sits behind the
+  `StorageService` port; an `S3StorageService` (with SSE encryption at rest and gzip compression) is a
+  drop-in swap with no change to reconstruction or the read API.
+- **Raw payload forwarded to Kafka.** The webhook doesn't fully type the body before publishing —
+  keeps ingestion fast and decouples HTTP from event schemas; the consumer owns deserialization.
+- **DB is the source of truth for reads.** The GET endpoint always orders segments from the DB; the
+  stored file is a convenience artifact referenced by URI, not reverse-parsed.
+- **`sessionId` is the unit of ordering and idempotency.** Assumed globally unique.
 
 ---
 
@@ -256,46 +294,32 @@ Summarized here; full rationale and the mapping to tests is in [`DESIGN.md`](DES
 | Malformed JSON at webhook | 400 with a meaningful message. |
 | Missing/invalid HMAC (enabled) | 401, fail-closed. |
 
+### Edge-case sequences
+
+One sequence diagram per scenario (see [`DESIGN.md`](DESIGN.md) for the rationale):
+
+- [Happy-path sequence diagram](docs/sequence-happy-path.png)
+- [Duplicate transcript chunk](docs/sequence-duplicate-transcript.png) — same `transcriptId` twice → stored once
+- [Out-of-order delivery](docs/sequence-out-of-order.png) — seq 3, 1, 2 → ordered on read
+- [Transcript after `meeting.ended`](docs/sequence-transcript-after-ended.png) — still stored, session stays ENDED
+- [`meeting.ended` without `meeting.started`](docs/sequence-ended-without-started.png) — retried, then dead-lettered
+- [Concurrent sessions, same meeting](docs/sequence-concurrent-sessions.png) — tracked independently
+
 ---
 
-## Scalability & service boundaries
+## Tech stack
 
-The service is a modular monolith with boundaries drawn so it can be split into independently
-deployable services without a rewrite — components already communicate over Kafka topics and
-repository/port interfaces, not cross-domain method calls.
-
-- **Read and write paths are separated.** The write path (webhook → Kafka → consumers) is fully
-  asynchronous and scales with consumer concurrency / partitions; the read path
-  (`GET .../transcript`) only touches the DB and scales with read replicas / caching. They fail and
-  scale independently — a lean CQRS split over one store.
-- **Natural extraction points:** ingestion (HTTP edge, stateless) · processing (event consumers) ·
-  reconstruction (assembly + storage) · read/query. Each is a package today with its own
-  topic/table ownership.
-- **Broker swap is config, not code:** publishing goes through `KafkaProducerService` and consumption
-  through `@KafkaListener`, so moving to managed Kafka is a configuration change.
-
-See [`DESIGN.md`](DESIGN.md) for the full boundary analysis and the per-decision rationale.
-
-## Trade-offs & assumptions
-
-- **In-process Kafka topics, not a managed broker.** Sufficient for the assignment; the producer and
-  `@KafkaListener` seams mean swapping to managed Kafka is configuration, not a rewrite.
-- **No transactional outbox — natural-key idempotency instead.** Ingestion doesn't write to the DB
-  (no dual-write to make atomic), and consumers dedup on `transcriptId` / `sessionId`, so at-least-once
-  redelivery is a safe no-op. The one residual risk (a lost `transcript.reconstruct` task) is
-  recoverable since reconstruction is idempotent and the transcript is always in the DB.
-- **Reconstruct after `meeting.ended`, relying on at-least-once client delivery.** Assembling once the
-  session closes avoids rewriting the file per chunk and needing a total count up front. Completeness
-  can be checked via `sequenceNumber` gap detection at reconstruction; a `totalSegments` field on the
-  closing event would make it definitive if upstream added one.
-- **Local file storage simulates an object store.** `LocalFileStorageService` sits behind the
-  `StorageService` port; an `S3StorageService` (with SSE encryption at rest and gzip compression) is a
-  drop-in swap with no change to reconstruction or the read API.
-- **Raw payload forwarded to Kafka.** The webhook doesn't fully type the body before publishing —
-  keeps ingestion fast and decouples HTTP from event schemas; the consumer owns deserialization.
-- **DB is the source of truth for reads.** The GET endpoint always orders segments from the DB; the
-  stored file is a convenience artifact referenced by URI, not reverse-parsed.
-- **`sessionId` is the unit of ordering and idempotency.** Assumed globally unique.
+| Concern      | Choice                                               |
+| ------------ | ---------------------------------------------------- |
+| Language     | Java 17                                              |
+| Framework    | Spring Boot 4.1.0 (Spring Framework 7)               |
+| Build        | Maven (via the included wrapper `./mvnw`)            |
+| Messaging    | Apache Kafka (KRaft mode — no Zookeeper)             |
+| Database     | PostgreSQL 16 (H2 in tests)                          |
+| Migrations   | Flyway                                               |
+| Boilerplate  | Lombok 1.18.46                                        |
+| Observability| Actuator + Micrometer/Prometheus + Grafana           |
+| Tests        | JUnit 5, Mockito, Spring Kafka Test (embedded), Awaitility |
 
 ---
 
