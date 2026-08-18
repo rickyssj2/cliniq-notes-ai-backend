@@ -225,7 +225,9 @@ See [`DESIGN.md`](DESIGN.md) for the full boundary analysis and the per-decision
   self-contained, not a limitation. Because publishing goes through `KafkaProducerService` and
   consumption through `@KafkaListener`, moving to a managed Kafka is a configuration change rather
   than a rewrite.
-- **No transactional outbox — natural-key idempotency instead.** Ingestion never writes to the DB, so
+- **No transactional outbox — natural-key idempotency instead.** Kafka supports ~1 MB messages by
+  default and text-only transcript segments fit comfortably, so we forward the payload through Kafka
+  rather than staging it in the DB and publishing separately. Ingestion never writes to the DB, so
   there is no dual-write to make atomic, and consumers dedup on `transcriptId` and `sessionId`, which
   makes at-least-once redelivery a safe no-op. A lost `transcript.reconstruct` task or a late
   transcript after `meeting.ended` can still leave the file missing or stale. The planned fix is to

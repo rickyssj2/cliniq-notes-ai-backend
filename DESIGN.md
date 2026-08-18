@@ -142,6 +142,11 @@ We deliberately did **not** implement a transactional outbox. The outbox pattern
 DB write and the event publish atomic (avoiding dual-write inconsistency). We don't need it here
 because the flow is inverted and idempotent by natural key:
 
+Kafka supports messages up to ~1 MB by default, and we assume text-only transcript segments fit
+comfortably within that limit. So we can forward the payload straight through Kafka rather than
+staging it in the DB first and publishing an event separately — which is exactly the dual-write an
+outbox would be needed to coordinate.
+
 - On ingestion the webhook only publishes to Kafka; there is **no DB write on the produce side**, so
   there is no dual-write to keep atomic.
 - On the consume side, processing is driven by the event and made safe by natural dedup keys:
